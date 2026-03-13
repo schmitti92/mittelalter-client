@@ -79,6 +79,7 @@
         <div class="small" id="jokerHint">–</div>
       </div>
 
+
       <div class="card" id="bossCard">
         <div class="cardTitle">Boss</div>
         <div class="bossWrap" id="bossWrap">
@@ -98,11 +99,11 @@
     </aside>
   </main>
 
+
   <div id="onlineBadge" style="position:fixed;left:12px;bottom:12px;z-index:9999;background:rgba(14,22,38,.92);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.35);font:14px/1.35 Arial,Helvetica,sans-serif;backdrop-filter:blur(6px);max-width:280px">
     <div style="font-weight:700;margin-bottom:4px">Lobby-Info</div>
     <div id="onlineBadgeText">Prüfe Lobby-Daten…</div>
   </div>
-
   <script>
 (function () {
   const SERVER_HTTP = 'https://mittelalter-server.onrender.com';
@@ -118,7 +119,8 @@
 
   function safeSet(storage, key, value) {
     try {
-      storage.setItem(key, value);
+      if (value == null) storage.removeItem(key);
+      else storage.setItem(key, value);
     } catch (err) {}
   }
 
@@ -128,6 +130,10 @@
     } catch (err) {
       return {};
     }
+  }
+
+  function makePlayerId() {
+    return 'p_' + Math.random().toString(36).slice(2, 10);
   }
 
   function readLobbySession() {
@@ -145,9 +151,11 @@
       packedLocal.playerName ||
       '';
 
-    const playerId =
+    let playerId =
       safeGet(sessionStorage, 'playerId') ||
       safeGet(localStorage, 'playerId') ||
+      safeGet(sessionStorage, 'mittelalter_player_id') ||
+      safeGet(localStorage, 'mittelalter_player_id') ||
       packedSession.playerId ||
       packedLocal.playerId ||
       '';
@@ -155,6 +163,8 @@
     const sessionToken =
       safeGet(sessionStorage, 'mittelalter_session') ||
       safeGet(localStorage, 'mittelalter_session') ||
+      safeGet(sessionStorage, 'mittelalter_session_token') ||
+      safeGet(localStorage, 'mittelalter_session_token') ||
       packedSession.sessionToken ||
       packedLocal.sessionToken ||
       '';
@@ -163,6 +173,8 @@
       roomFromUrl ||
       safeGet(sessionStorage, 'roomCode') ||
       safeGet(localStorage, 'roomCode') ||
+      safeGet(sessionStorage, 'mittelalter_room_code') ||
+      safeGet(localStorage, 'mittelalter_room_code') ||
       packedSession.roomCode ||
       packedLocal.roomCode ||
       '';
@@ -175,6 +187,8 @@
       packedSession.lastMode ||
       packedLocal.lastMode ||
       'online';
+
+    if (!playerId && roomCode) playerId = makePlayerId();
 
     return {
       playerName: String(playerName || '').trim(),
@@ -194,20 +208,26 @@
   safeSet(sessionStorage, 'playerName', session.playerName || '');
   safeSet(sessionStorage, 'roomCode', session.roomCode || '');
   safeSet(sessionStorage, 'playerId', session.playerId || '');
+  safeSet(sessionStorage, 'mittelalter_player_id', session.playerId || '');
   safeSet(sessionStorage, 'mittelalter_session', session.sessionToken || '');
+  safeSet(sessionStorage, 'mittelalter_session_token', session.sessionToken || '');
   safeSet(sessionStorage, 'isHost', session.isHost ? 'true' : 'false');
   safeSet(sessionStorage, 'mittelalterLastMode', session.lastMode || 'online');
   safeSet(sessionStorage, 'mittelalterServerHttp', SERVER_HTTP);
   safeSet(sessionStorage, 'mittelalterServerWs', SERVER_WS);
+  safeSet(sessionStorage, 'mittelalter_server_url', SERVER_WS);
 
   safeSet(localStorage, 'playerName', session.playerName || '');
   safeSet(localStorage, 'roomCode', session.roomCode || '');
   safeSet(localStorage, 'playerId', session.playerId || '');
+  safeSet(localStorage, 'mittelalter_player_id', session.playerId || '');
   safeSet(localStorage, 'mittelalter_session', session.sessionToken || '');
+  safeSet(localStorage, 'mittelalter_session_token', session.sessionToken || '');
   safeSet(localStorage, 'isHost', session.isHost ? 'true' : 'false');
   safeSet(localStorage, 'mittelalterLastMode', session.lastMode || 'online');
   safeSet(localStorage, 'mittelalterServerHttp', SERVER_HTTP);
   safeSet(localStorage, 'mittelalterServerWs', SERVER_WS);
+  safeSet(localStorage, 'mittelalter_server_url', SERVER_WS);
 
   const packed = {
     playerName: session.playerName,
@@ -239,53 +259,13 @@
       'Spieler: <b>' + session.playerName + '</b><br>' +
       'Raum: <b>' + session.roomCode + '</b><br>' +
       'ID: <b>' + (session.playerId || '–') + '</b><br>' +
-      'Token: <b>' + (session.sessionToken ? 'vorhanden' : 'fehlt') + '</b><br>' +
+      'Token: <b>' + (session.sessionToken ? 'vorhanden' : 'neu / leer') + '</b><br>' +
       'Rolle: <b>' + (session.isHost ? 'Host' : 'Mitspieler') + '</b><br>' +
       'Modus: <b>' + (session.lastMode === 'online' ? 'Online' : 'Offline-Test') + '</b>';
   }
-
-  const NativeWebSocket = window.WebSocket;
-  if (NativeWebSocket && !window.__mittelalterAutoJoinPatched) {
-    window.__mittelalterAutoJoinPatched = true;
-
-    function WrappedWebSocket(url, protocols) {
-      const ws = protocols !== undefined ? new NativeWebSocket(url, protocols) : new NativeWebSocket(url);
-      const targetUrl = String(url || '');
-      const isMittelalterSocket =
-        targetUrl.includes('mittelalter-server') ||
-        targetUrl.includes('onrender.com') ||
-        targetUrl === SERVER_WS;
-
-      if (isMittelalterSocket) {
-        let joined = false;
-        ws.addEventListener('open', function () {
-          if (joined) return;
-          joined = true;
-          try {
-            const payload = {
-              type: 'join_room',
-              roomCode: session.roomCode,
-              playerId: session.playerId,
-              sessionToken: session.sessionToken || safeGet(localStorage, 'mittelalter_session') || safeGet(sessionStorage, 'mittelalter_session'),
-              name: session.playerName
-            };
-            ws.send(JSON.stringify(payload));
-            console.log('[Mittelalter] Auto-Join gesendet:', payload);
-          } catch (err) {
-            console.warn('[Mittelalter] Auto-Join fehlgeschlagen:', err);
-          }
-        });
-      }
-      return ws;
-    }
-
-    WrappedWebSocket.prototype = NativeWebSocket.prototype;
-    Object.setPrototypeOf(WrappedWebSocket, NativeWebSocket);
-    window.WebSocket = WrappedWebSocket;
-  }
 })();
-  </script>
+  </script></script>
 
-  <script src="Mittelalter.game.js?v=264"></script>
+  <script src="Mittelalter.game.js?v=270"></script>
 </body>
 </html>
