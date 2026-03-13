@@ -450,6 +450,7 @@ const online = {
   playerId: null,
   playerName: null,
   serverUrl: null,
+  sessionToken: null,
   ws: null,
   connected: false,
   joined: false,
@@ -484,6 +485,7 @@ function lsGet(keys){
 function resolveOnlineContext(){
   const roomCode = (qp('roomCode') || qp('room') || qp('code') || lsGet(['mittelalter_room_code','mittelalterRoomCode','roomCode']) || '').trim().toUpperCase();
   const playerId = (qp('playerId') || qp('pid') || lsGet(['mittelalter_player_id','mittelalterPlayerId','playerId']) || '').trim();
+  const sessionToken = (qp('sessionToken') || qp('session') || qp('token') || lsGet(['mittelalter_session_token','mittelalterSessionToken','sessionToken']) || '').trim();
   const playerName = (qp('name') || lsGet(['mittelalter_player_name','mittelalterPlayerName','playerName']) || 'Spieler').trim();
   const serverUrlRaw = (qp('serverUrl') || qp('server') || qp('ws') || qp('wss') || lsGet(['mittelalter_server_url','mittelalterServerUrl','serverUrl']) || '').trim();
   if(!roomCode || !playerId || !serverUrlRaw) return null;
@@ -492,7 +494,44 @@ function resolveOnlineContext(){
     wsUrl = wsUrl.replace(/^http/i, 'ws');
   }
   if(!/^wss?:\/\//i.test(wsUrl)) return null;
-  return { roomCode, playerId, playerName, serverUrl: wsUrl };
+  return { roomCode, playerId, sessionToken, playerName, serverUrl: wsUrl };
+}
+
+function persistOnlineIdentity(self=null, room=null){
+  try{
+    const roomCode = String(room?.roomCode || online.roomCode || '').trim().toUpperCase();
+    const playerId = String(self?.playerId || online.playerId || '').trim();
+    const sessionToken = String(self?.sessionToken || online.sessionToken || '').trim();
+    const playerName = String(self?.name || online.playerName || '').trim();
+    const serverUrl = String(online.serverUrl || '').trim();
+    if(roomCode) localStorage.setItem('mittelalter_room_code', roomCode);
+    if(playerId) localStorage.setItem('mittelalter_player_id', playerId);
+    if(sessionToken) localStorage.setItem('mittelalter_session_token', sessionToken);
+    if(playerName) localStorage.setItem('mittelalter_player_name', playerName);
+    if(serverUrl) localStorage.setItem('mittelalter_server_url', serverUrl);
+  }catch(_){ }
+}
+
+function clearOnlineIdentity(){
+  const keys = [
+    'mittelalter_room_code','mittelalterRoomCode','roomCode',
+    'mittelalter_player_id','mittelalterPlayerId','playerId',
+    'mittelalter_session_token','mittelalterSessionToken','sessionToken',
+    'mittelalter_player_name','mittelalterPlayerName','playerName',
+    'mittelalter_server_url','mittelalterServerUrl','serverUrl'
+  ];
+  for(const k of keys){
+    try{ localStorage.removeItem(k); }catch(_){ }
+  }
+}
+
+function applyOnlineSelf(self, room=null){
+  if(!self || typeof self !== 'object') return;
+  if(self.playerId) online.playerId = String(self.playerId);
+  if(self.sessionToken) online.sessionToken = String(self.sessionToken);
+  if(self.name) online.playerName = String(self.name);
+  if(room?.roomCode) online.roomCode = String(room.roomCode).toUpperCase();
+  persistOnlineIdentity(self, room);
 }
 function isOnlineAuthorityActive(){
   return !!(online.enabled && online.connected && online.joined);
@@ -938,6 +977,7 @@ function connectOnlineAuthority(){
   online.roomCode = ctx.roomCode;
   online.playerId = ctx.playerId;
   online.playerName = ctx.playerName;
+  online.sessionToken = ctx.sessionToken || '';
   online.serverUrl = ctx.serverUrl;
 
   try{
@@ -957,6 +997,7 @@ function connectOnlineAuthority(){
         type: 'join_room',
         roomCode: online.roomCode,
         playerId: online.playerId,
+        sessionToken: online.sessionToken || '',
         name: online.playerName || 'Spieler'
       }));
     }catch(err){
@@ -982,7 +1023,7 @@ function connectOnlineAuthority(){
     }
     if(type === 'room_joined' || type === 'room_created'){
       online.joined = true;
-      if(msg.self?.playerId) online.playerId = msg.self.playerId;
+      if(msg.self) applyOnlineSelf(msg.self, msg.room || null);
       if(msg.room) applyServerRoomState(msg.room, { forceNeedRoll:false, silentDraw:false });
       if(sendServerAction('turn_update', { turnIndex:Number(state.turn||0), phase:String(state.phase||'needRoll') })){
         // only as soft sync for reconnect; server validates later on real actions
@@ -991,6 +1032,7 @@ function connectOnlineAuthority(){
       return;
     }
     if(type === 'room_state'){
+      if(msg.self) applyOnlineSelf(msg.self, msg.room || null);
       if(msg.room) applyServerRoomState(msg.room, { forceNeedRoll:false, silentDraw:false });
       return;
     }
@@ -1065,6 +1107,10 @@ function connectOnlineAuthority(){
       clearPendingRequest(String(msg.message || 'Serverfehler'));
       console.warn('[ONLINE] server error', msg.message);
       pushOnlineTrace(`[ERR] ${msg.message || 'server error'}`);
+      if(typeof msg.message === 'string' && /Reconnect abgelehnt|Spiel läuft bereits\. Reconnect nur mit gespeicherter Spieler-ID \+ Session\./i.test(msg.message)){
+        clearOnlineIdentity();
+        online.sessionToken = '';
+      }
       if(msg.message) setStatus(String(msg.message));
       return;
     }
