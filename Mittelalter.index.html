@@ -79,7 +79,6 @@
         <div class="small" id="jokerHint">–</div>
       </div>
 
-
       <div class="card" id="bossCard">
         <div class="cardTitle">Boss</div>
         <div class="bossWrap" id="bossWrap">
@@ -99,11 +98,11 @@
     </aside>
   </main>
 
-
   <div id="onlineBadge" style="position:fixed;left:12px;bottom:12px;z-index:9999;background:rgba(14,22,38,.92);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.35);font:14px/1.35 Arial,Helvetica,sans-serif;backdrop-filter:blur(6px);max-width:280px">
     <div style="font-weight:700;margin-bottom:4px">Lobby-Info</div>
     <div id="onlineBadgeText">Prüfe Lobby-Daten…</div>
   </div>
+
   <script>
 (function () {
   const SERVER_HTTP = 'https://mittelalter-server.onrender.com';
@@ -153,6 +152,13 @@
       packedLocal.playerId ||
       '';
 
+    const sessionToken =
+      safeGet(sessionStorage, 'mittelalter_session') ||
+      safeGet(localStorage, 'mittelalter_session') ||
+      packedSession.sessionToken ||
+      packedLocal.sessionToken ||
+      '';
+
     const roomCode =
       roomFromUrl ||
       safeGet(sessionStorage, 'roomCode') ||
@@ -173,6 +179,7 @@
     return {
       playerName: String(playerName || '').trim(),
       playerId: String(playerId || '').trim(),
+      sessionToken: String(sessionToken || '').trim(),
       roomCode: String(roomCode || '').trim().toUpperCase(),
       isHost,
       lastMode,
@@ -187,6 +194,7 @@
   safeSet(sessionStorage, 'playerName', session.playerName || '');
   safeSet(sessionStorage, 'roomCode', session.roomCode || '');
   safeSet(sessionStorage, 'playerId', session.playerId || '');
+  safeSet(sessionStorage, 'mittelalter_session', session.sessionToken || '');
   safeSet(sessionStorage, 'isHost', session.isHost ? 'true' : 'false');
   safeSet(sessionStorage, 'mittelalterLastMode', session.lastMode || 'online');
   safeSet(sessionStorage, 'mittelalterServerHttp', SERVER_HTTP);
@@ -195,6 +203,7 @@
   safeSet(localStorage, 'playerName', session.playerName || '');
   safeSet(localStorage, 'roomCode', session.roomCode || '');
   safeSet(localStorage, 'playerId', session.playerId || '');
+  safeSet(localStorage, 'mittelalter_session', session.sessionToken || '');
   safeSet(localStorage, 'isHost', session.isHost ? 'true' : 'false');
   safeSet(localStorage, 'mittelalterLastMode', session.lastMode || 'online');
   safeSet(localStorage, 'mittelalterServerHttp', SERVER_HTTP);
@@ -204,6 +213,7 @@
     playerName: session.playerName,
     roomCode: session.roomCode,
     playerId: session.playerId,
+    sessionToken: session.sessionToken,
     isHost: session.isHost,
     lastMode: session.lastMode,
     serverHttp: SERVER_HTTP,
@@ -229,6 +239,7 @@
       'Spieler: <b>' + session.playerName + '</b><br>' +
       'Raum: <b>' + session.roomCode + '</b><br>' +
       'ID: <b>' + (session.playerId || '–') + '</b><br>' +
+      'Token: <b>' + (session.sessionToken ? 'vorhanden' : 'fehlt') + '</b><br>' +
       'Rolle: <b>' + (session.isHost ? 'Host' : 'Mitspieler') + '</b><br>' +
       'Modus: <b>' + (session.lastMode === 'online' ? 'Online' : 'Offline-Test') + '</b>';
   }
@@ -255,6 +266,7 @@
               type: 'join_room',
               roomCode: session.roomCode,
               playerId: session.playerId,
+              sessionToken: session.sessionToken || safeGet(localStorage, 'mittelalter_session') || safeGet(sessionStorage, 'mittelalter_session'),
               name: session.playerName
             };
             ws.send(JSON.stringify(payload));
@@ -274,6 +286,6 @@
 })();
   </script>
 
-  <script src="Mittelalter.game.js?v=263"></script>
+  <script src="Mittelalter.game.js?v=264"></script>
 </body>
 </html>
