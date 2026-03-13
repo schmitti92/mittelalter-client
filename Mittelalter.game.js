@@ -480,17 +480,23 @@ function qp(name){
 function lsGet(keys){
   for(const k of keys){
     try{
-      const v = localStorage.getItem(k);
-      if(v) return v;
+      const sv = sessionStorage.getItem(k);
+      if(sv) return sv;
+    }catch(_){ }
+    try{
+      const lv = localStorage.getItem(k);
+      if(lv) return lv;
     }catch(_){ }
   }
   return null;
 }
 function lsSet(key, value){
-  try{
-    if(value == null || value === '') localStorage.removeItem(key);
-    else localStorage.setItem(key, String(value));
-  }catch(_){ }
+  for(const storage of [sessionStorage, localStorage]){
+    try{
+      if(value == null || value === '') storage.removeItem(key);
+      else storage.setItem(key, String(value));
+    }catch(_){ }
+  }
 }
 function persistOnlineIdentity(overrides={}){
   const roomCode = (overrides.roomCode ?? online.roomCode ?? '').toString().trim().toUpperCase();
@@ -503,6 +509,10 @@ function persistOnlineIdentity(overrides={}){
   lsSet('mittelalter_session_token', sessionToken);
   lsSet('mittelalter_player_name', playerName);
   lsSet('mittelalter_server_url', serverUrl);
+  lsSet('roomCode', roomCode);
+  lsSet('playerId', playerId);
+  lsSet('playerName', playerName);
+  lsSet('mittelalter_session', sessionToken);
 }
 function clearOnlineIdentity(){
   for(const key of ['mittelalter_room_code','mittelalter_player_id','mittelalter_session_token','mittelalter_player_name','mittelalter_server_url']){
@@ -536,14 +546,15 @@ function beginCrashSafeRecovery(kind='retry'){
   online.lastError = null;
 
   if(kind === 'fresh-lobby-rejoin'){
+    online.invalidSessionRecoveryCount = Number(online.invalidSessionRecoveryCount || 0) + 1;
     const freshId = makeFreshOnlinePlayerId();
     online.playerId = freshId;
     online.sessionToken = '';
     persistOnlineIdentity({ playerId: freshId, sessionToken: '' });
     lsSet('playerId', freshId);
     lsSet('mittelalter_player_id', freshId);
-    setStatus('Alte Sitzung war ungültig. Neuer Beitritt zur Lobby wird versucht...');
-    pushOnlineTrace('[RECOVERY] frischer Lobby-Beitritt');
+    setStatus('Alte Sitzung war ungültig. Neuer Beitritt wird versucht...');
+    pushOnlineTrace('[RECOVERY] frischer Beitritt mit neuer Sitzung');
     online.manualClose = false;
     scheduleOnlineReconnect('fresh-lobby-rejoin');
     return;
@@ -602,11 +613,12 @@ function installOnlineReconnectHooks(){
   });
 }
 function resolveOnlineContext(){
-  const roomCode = (qp('roomCode') || qp('room') || qp('code') || lsGet(['mittelalter_room_code','mittelalterRoomCode','roomCode']) || '').trim().toUpperCase();
-  const playerId = (qp('playerId') || qp('pid') || lsGet(['mittelalter_player_id','mittelalterPlayerId','playerId']) || '').trim();
-  const sessionToken = (qp('sessionToken') || qp('token') || lsGet(['mittelalter_session_token','mittelalterSessionToken','sessionToken']) || '').trim();
-  const playerName = (qp('name') || lsGet(['mittelalter_player_name','mittelalterPlayerName','playerName']) || 'Spieler').trim();
-  const serverUrlRaw = (qp('serverUrl') || qp('server') || qp('ws') || qp('wss') || lsGet(['mittelalter_server_url','mittelalterServerUrl','serverUrl']) || '').trim();
+  const boot = (window.MITTELALTER_SESSION && typeof window.MITTELALTER_SESSION === 'object') ? window.MITTELALTER_SESSION : {};
+  const roomCode = (qp('roomCode') || qp('room') || qp('code') || boot.roomCode || lsGet(['mittelalter_room_code','mittelalterRoomCode','roomCode']) || '').trim().toUpperCase();
+  const playerId = (qp('playerId') || qp('pid') || boot.playerId || lsGet(['mittelalter_player_id','mittelalterPlayerId','playerId']) || '').trim();
+  const sessionToken = (qp('sessionToken') || qp('token') || boot.sessionToken || lsGet(['mittelalter_session_token','mittelalterSessionToken','sessionToken','mittelalter_session']) || '').trim();
+  const playerName = (qp('name') || boot.playerName || lsGet(['mittelalter_player_name','mittelalterPlayerName','playerName']) || 'Spieler').trim();
+  const serverUrlRaw = (qp('serverUrl') || qp('server') || qp('ws') || qp('wss') || boot.serverWs || boot.serverUrl || lsGet(['mittelalter_server_url','mittelalterServerUrl','serverUrl']) || '').trim();
   if(!roomCode || !playerId || !serverUrlRaw) return null;
   let wsUrl = serverUrlRaw;
   if(/^https?:\/\//i.test(wsUrl)){
@@ -1119,6 +1131,7 @@ function connectOnlineAuthority(options={}){
     }
     if(type === 'room_joined' || type === 'room_created'){
       online.joined = true;
+      online.invalidSessionRecoveryCount = 0;
       online.authoritativeMoveActorId = null;
       applyOnlineSelf(msg.self);
       if(msg.room) applyServerRoomState(msg.room, { forceNeedRoll:false, silentDraw:false });
@@ -1132,6 +1145,7 @@ function connectOnlineAuthority(options={}){
     }
     if(type === 'game_started'){
       online.joined = true;
+      online.invalidSessionRecoveryCount = 0;
       online.authoritativeMoveActorId = null;
       applyOnlineSelf(msg.self);
       if(msg.room) applyServerRoomState(msg.room, { forceNeedRoll:true, silentDraw:false });
@@ -1217,9 +1231,10 @@ function connectOnlineAuthority(options={}){
 
       if(/Reconnect abgelehnt|Session ungültig/i.test(msgText)){
         const inWaitingRoom = !!online.room && online.room.status === 'waiting';
+        const mayRetryFresh = inWaitingRoom || !online.joined;
         clearOnlineIdentity();
         online.sessionToken = null;
-        if(inWaitingRoom){
+        if(mayRetryFresh && Number(online.invalidSessionRecoveryCount || 0) < 1){
           beginCrashSafeRecovery('fresh-lobby-rejoin');
         }else{
           online.playerId = null;
