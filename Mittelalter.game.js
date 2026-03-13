@@ -545,6 +545,68 @@ function redirectToLobbyWithContext(reason='reconnect_failed'){
     location.href = 'Mittelalter.lobby.html';
   }
 }
+function ensureOnlineRecoveryPanel(){
+  if(online.recoveryPanelEl) return online.recoveryPanelEl;
+  const wrap = document.createElement('div');
+  wrap.id = 'onlineRecoveryPanel';
+  wrap.style.cssText = [
+    'position:fixed',
+    'left:50%',
+    'top:92px',
+    'transform:translateX(-50%)',
+    'z-index:100001',
+    'display:none',
+    'width:min(560px, calc(100vw - 24px))',
+    'background:rgba(9,14,24,.95)',
+    'border:1px solid rgba(255,255,255,.16)',
+    'border-radius:18px',
+    'box-shadow:0 18px 50px rgba(0,0,0,.42)',
+    'padding:16px',
+    'color:#f3f6ff',
+    'font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Arial'
+  ].join(';');
+  wrap.innerHTML = `
+    <div style="font-weight:800;font-size:18px;margin-bottom:6px">Multiplayer-Verbindung unterbrochen</div>
+    <div id="onlineRecoveryText" style="opacity:.96;margin-bottom:12px">Die Verbindung wurde getrennt.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button id="btnRecoveryReconnect" style="all:unset;padding:10px 14px;border-radius:12px;background:#2b6cf0;cursor:pointer;font-weight:700">Neu verbinden</button>
+      <button id="btnRecoveryFreshJoin" style="all:unset;padding:10px 14px;border-radius:12px;background:#9a6a2f;cursor:pointer;font-weight:700">Frisch beitreten</button>
+      <button id="btnRecoveryConsole" style="all:unset;padding:10px 14px;border-radius:12px;background:rgba(255,255,255,.10);cursor:pointer;font-weight:700">Debug öffnen</button>
+      <button id="btnRecoveryLobby" style="all:unset;padding:10px 14px;border-radius:12px;background:rgba(255,255,255,.08);cursor:pointer;font-weight:700">Zur Lobby</button>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+  const btnReconnect = wrap.querySelector('#btnRecoveryReconnect');
+  const btnFresh = wrap.querySelector('#btnRecoveryFreshJoin');
+  const btnConsole = wrap.querySelector('#btnRecoveryConsole');
+  const btnLobby = wrap.querySelector('#btnRecoveryLobby');
+  if(btnReconnect) btnReconnect.addEventListener('click', ()=>{
+    hideOnlineRecoveryPanel();
+    online.manualClose = false;
+    scheduleOnlineReconnect('manual-reconnect');
+  });
+  if(btnFresh) btnFresh.addEventListener('click', ()=>{
+    hideOnlineRecoveryPanel();
+    online.invalidSessionRecoveryCount = 0;
+    beginCrashSafeRecovery('fresh-lobby-rejoin');
+  });
+  if(btnConsole) btnConsole.addEventListener('click', ()=>{
+    try{ const c = document.getElementById('osConsole'); if(c) c.style.display = 'flex'; }catch(_){ }
+  });
+  if(btnLobby) btnLobby.addEventListener('click', ()=>redirectToLobbyWithContext(online.recoveryReason || 'manual_lobby'));
+  online.recoveryPanelEl = wrap;
+  return wrap;
+}
+function showOnlineRecoveryPanel(message, reason='retry'){
+  const wrap = ensureOnlineRecoveryPanel();
+  online.recoveryReason = reason || 'retry';
+  const textEl = wrap.querySelector('#onlineRecoveryText');
+  if(textEl) textEl.textContent = message || 'Die Verbindung zum Multiplayer ist unterbrochen.';
+  wrap.style.display = 'block';
+}
+function hideOnlineRecoveryPanel(){
+  if(online.recoveryPanelEl) online.recoveryPanelEl.style.display = 'none';
+}
 function beginCrashSafeRecovery(kind='retry'){
   clearReconnectTimer();
   clearPendingRequest('Crash-Safe Recovery');
@@ -553,8 +615,10 @@ function beginCrashSafeRecovery(kind='retry'){
   online.connected = false;
   online.joined = false;
   online.lastError = null;
+  updateOnlineDebugBadge();
 
   if(kind === 'fresh-lobby-rejoin'){
+    hideOnlineRecoveryPanel();
     online.invalidSessionRecoveryCount = Number(online.invalidSessionRecoveryCount || 0) + 1;
     const freshId = makeFreshOnlinePlayerId();
     online.playerId = freshId;
@@ -562,6 +626,8 @@ function beginCrashSafeRecovery(kind='retry'){
     persistOnlineIdentity({ playerId: freshId, sessionToken: '' });
     lsSet('playerId', freshId);
     lsSet('mittelalter_player_id', freshId);
+    lsSet('mittelalter_session', '');
+    lsSet('mittelalter_session_token', '');
     setStatus('Alte Sitzung war ungültig. Neuer Beitritt wird versucht...');
     pushOnlineTrace('[RECOVERY] frischer Beitritt mit neuer Sitzung');
     online.manualClose = false;
@@ -569,9 +635,16 @@ function beginCrashSafeRecovery(kind='retry'){
     return;
   }
 
-  setStatus('Raum/Sitzung nicht mehr gültig. Zurück zur Lobby...');
-  pushOnlineTrace('[RECOVERY] zurück zur Lobby');
-  setTimeout(()=>redirectToLobbyWithContext(kind), 900);
+  const msgMap = {
+    room_missing: 'Der Raum wurde nicht gefunden. Du bleibst im Spielscreen und kannst direkt zur Lobby oder neu verbinden.',
+    invalid_session: 'Spieler-ID oder Sitzung ist ungültig. Du bleibst hier und kannst frisch neu beitreten.',
+    running_game_requires_reconnect: 'Das Spiel läuft bereits. Dafür brauchst du die korrekte gespeicherte Sitzung oder musst über die Lobby neu rein.',
+    retry: 'Die Verbindung wurde getrennt. Du kannst neu verbinden oder frisch beitreten.'
+  };
+  const panelMsg = msgMap[kind] || msgMap.retry;
+  setStatus(panelMsg);
+  pushOnlineTrace(`[RECOVERY] panel offen (${kind})`);
+  showOnlineRecoveryPanel(panelMsg, kind);
 }
 function applyOnlineSelf(self){
   if(!self || typeof self !== 'object') return;
@@ -1168,6 +1241,7 @@ function connectOnlineAuthority(options={}){
     online.lastError = null;
     startOnlineHeartbeat();
     updateOnlineDebugBadge();
+    hideOnlineRecoveryPanel();
     setStatus('Mit Server verbunden – Raumbeitritt läuft...');
     console.info('[ONLINE] connected', online.serverUrl, online.roomCode, online.playerId);
     try{
@@ -1275,6 +1349,7 @@ function connectOnlineAuthority(options={}){
       return;
     }
     if(type === 'event_card'){
+      hideOnlineRecoveryPanel();
       if(msg.room) applyServerRoomState(msg.room, { forceNeedRoll:false, silentDraw:true });
       if(msg.info) setStatus(String(msg.info));
       if(msg.card){
@@ -1302,9 +1377,9 @@ function connectOnlineAuthority(options={}){
       setStatus(msgText);
 
       if(/Raum nicht gefunden/i.test(msgText)){
-        clearOnlineIdentity();
         online.playerId = null;
         online.sessionToken = null;
+        persistOnlineIdentity({ playerId:'', sessionToken:'' });
         updateOnlineDebugBadge();
         beginCrashSafeRecovery('room_missing');
         return;
@@ -1313,12 +1388,13 @@ function connectOnlineAuthority(options={}){
       if(/Reconnect abgelehnt|Session ungültig/i.test(msgText)){
         const inWaitingRoom = !!online.room && online.room.status === 'waiting';
         const mayRetryFresh = inWaitingRoom || !online.joined;
-        clearOnlineIdentity();
         online.sessionToken = null;
+        persistOnlineIdentity({ playerId: online.playerId || '', sessionToken: '' });
         if(mayRetryFresh && Number(online.invalidSessionRecoveryCount || 0) < 1){
           beginCrashSafeRecovery('fresh-lobby-rejoin');
         }else{
           online.playerId = null;
+          persistOnlineIdentity({ playerId:'', sessionToken:'' });
           updateOnlineDebugBadge();
           beginCrashSafeRecovery('invalid_session');
         }
@@ -1326,9 +1402,9 @@ function connectOnlineAuthority(options={}){
       }
 
       if(/Spiel läuft bereits\. Reconnect nur/i.test(msgText)){
-        clearOnlineIdentity();
         online.playerId = null;
         online.sessionToken = null;
+        persistOnlineIdentity({ playerId:'', sessionToken:'' });
         updateOnlineDebugBadge();
         beginCrashSafeRecovery('running_game_requires_reconnect');
         return;
