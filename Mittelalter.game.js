@@ -653,7 +653,7 @@ function beginCrashSafeRecovery(kind='retry'){
   const msgMap = {
     room_missing: 'Der Raum wurde nicht gefunden. Du bleibst im Spielscreen und kannst direkt zur Lobby oder neu verbinden.',
     invalid_session: 'Spieler-ID oder Sitzung ist ungültig. Du bleibst hier und kannst frisch neu beitreten.',
-    running_game_requires_reconnect: 'Das Spiel läuft bereits. Dafür brauchst du die korrekte gespeicherte Sitzung oder musst über die Lobby neu rein.',
+    running_game_requires_reconnect: 'Das Spiel läuft bereits. Deine gespeicherte Sitzung bleibt erhalten. Nutze "Neu verbinden" oder gehe über die Lobby erneut rein.',
     retry: 'Die Verbindung wurde getrennt. Du kannst neu verbinden oder frisch beitreten.'
   };
   const panelMsg = msgMap[kind] || msgMap.retry;
@@ -1416,9 +1416,10 @@ function connectOnlineAuthority(options={}){
       }
 
       if(/Spiel läuft bereits\. Reconnect nur/i.test(msgText)){
-        online.playerId = null;
-        online.sessionToken = null;
-        persistOnlineIdentity({ playerId:'', sessionToken:'' });
+        // Stability Patch v11:
+        // Die lokale Identität darf hier NICHT gelöscht werden.
+        // Sonst wird aus einem möglichen Reconnect sofort ein Fresh-Join,
+        // der vom laufenden Spiel absichtlich abgelehnt wird.
         updateOnlineDebugBadge();
         beginCrashSafeRecovery('running_game_requires_reconnect');
         return;
