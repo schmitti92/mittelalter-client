@@ -452,6 +452,7 @@ const online = {
   playerId: null,
   sessionToken: null,
   playerName: null,
+  slotIndex: null,
   serverUrl: null,
   ws: null,
   connected: false,
@@ -508,12 +509,25 @@ function lsSet(key, value){
   }
 }
 
+function normalizeOnlineSlotIndex(value){
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
 function updateBootSession(overrides={}){
   try{
     const boot = (window.MITTELALTER_SESSION && typeof window.MITTELALTER_SESSION === 'object') ? window.MITTELALTER_SESSION : {};
     const merged = Object.assign({}, boot, overrides || {});
     if(!('playerName' in merged) || !String(merged.playerName || '').trim()) merged.playerName = online.playerName || 'Spieler';
     if(!('roomCode' in merged) || !String(merged.roomCode || '').trim()) merged.roomCode = online.roomCode || '';
+    const mergedSlotIndex = normalizeOnlineSlotIndex(merged.slotIndex);
+    if(mergedSlotIndex == null){
+      const onlineSlotIndex = normalizeOnlineSlotIndex(overrides.slotIndex ?? online.slotIndex ?? boot.slotIndex);
+      if(onlineSlotIndex != null) merged.slotIndex = onlineSlotIndex;
+      else delete merged.slotIndex;
+    } else {
+      merged.slotIndex = mergedSlotIndex;
+    }
     if(!('serverWs' in merged) || !String(merged.serverWs || '').trim()) merged.serverWs = online.serverUrl || boot.serverWs || '';
     window.MITTELALTER_SESSION = merged;
   }catch(_){ }
@@ -527,7 +541,7 @@ function clearOnlineIdentityKeepRoomAndName(){
   lsSet('mittelalter_player_id', '');
   lsSet('mittelalter_session', '');
   lsSet('mittelalter_session_token', '');
-  updateBootSession({ playerId:'', sessionToken:'' });
+  updateBootSession({ playerId:'', sessionToken:'', slotIndex: normalizeOnlineSlotIndex(online.slotIndex) });
 }
 function persistOnlineIdentity(overrides={}){
   const roomCode = (overrides.roomCode ?? online.roomCode ?? '').toString().trim().toUpperCase();
@@ -535,21 +549,24 @@ function persistOnlineIdentity(overrides={}){
   const sessionToken = (overrides.sessionToken ?? online.sessionToken ?? '').toString().trim();
   const playerName = (overrides.playerName ?? online.playerName ?? 'Spieler').toString().trim() || 'Spieler';
   const serverUrl = (overrides.serverUrl ?? online.serverUrl ?? '').toString().trim();
+  const slotIndex = normalizeOnlineSlotIndex(overrides.slotIndex ?? online.slotIndex);
   lsSet('mittelalter_room_code', roomCode);
   lsSet('mittelalter_player_id', playerId);
   lsSet('mittelalter_session_token', sessionToken);
   lsSet('mittelalter_player_name', playerName);
   lsSet('mittelalter_server_url', serverUrl);
+  lsSet('mittelalter_slot_index', slotIndex == null ? '' : String(slotIndex));
   lsSet('roomCode', roomCode);
   lsSet('playerId', playerId);
   lsSet('playerName', playerName);
+  lsSet('slotIndex', slotIndex == null ? '' : String(slotIndex));
   lsSet('mittelalter_session', sessionToken);
 }
 function clearOnlineIdentity(){
-  for(const key of ['mittelalter_room_code','mittelalter_player_id','mittelalter_session_token','mittelalter_player_name','mittelalter_server_url']){
+  for(const key of ['mittelalter_room_code','mittelalter_player_id','mittelalter_session_token','mittelalter_player_name','mittelalter_server_url','mittelalter_slot_index']){
     lsSet(key, null);
   }
-  for(const key of ['roomCode','playerId','playerName','mittelalter_session']){
+  for(const key of ['roomCode','playerId','playerName','slotIndex','mittelalter_session']){
     lsSet(key, null);
   }
 }
@@ -666,12 +683,15 @@ function applyOnlineSelf(self){
   if(self.playerId != null) online.playerId = String(self.playerId || '');
   if(typeof self.sessionToken === 'string') online.sessionToken = String(self.sessionToken || '');
   if(self.name) online.playerName = String(self.name || 'Spieler');
+  if('slotIndex' in self) online.slotIndex = normalizeOnlineSlotIndex(self.slotIndex);
   online.forceFreshJoin = false;
   persistOnlineIdentity();
   lsSet('playerId', online.playerId || '');
   lsSet('playerName', online.playerName || '');
+  lsSet('slotIndex', online.slotIndex == null ? '' : String(online.slotIndex));
+  lsSet('mittelalter_slot_index', online.slotIndex == null ? '' : String(online.slotIndex));
   lsSet('mittelalter_session', online.sessionToken || '');
-  updateBootSession({ playerId: online.playerId || '', sessionToken: online.sessionToken || '', playerName: online.playerName || 'Spieler', roomCode: online.roomCode || '' });
+  updateBootSession({ playerId: online.playerId || '', sessionToken: online.sessionToken || '', playerName: online.playerName || 'Spieler', roomCode: online.roomCode || '', slotIndex: online.slotIndex });
 }
 function clearReconnectTimer(){
   if(online.reconnectTimer){
@@ -757,6 +777,7 @@ function resolveOnlineContext(){
   const playerId = (online.forceFreshJoin ? '' : (online.playerId || lsGet(['mittelalter_player_id','mittelalterPlayerId','playerId']) || boot.playerId || qp('playerId') || qp('pid') || '')).trim();
   const sessionToken = (online.forceFreshJoin ? '' : (online.sessionToken || lsGet(['mittelalter_session_token','mittelalterSessionToken','sessionToken','mittelalter_session']) || boot.sessionToken || qp('sessionToken') || qp('token') || '')).trim();
   const playerName = (online.playerName || qp('name') || lsGet(['mittelalter_player_name','mittelalterPlayerName','playerName']) || boot.playerName || 'Spieler').trim();
+  const slotIndex = normalizeOnlineSlotIndex(online.slotIndex ?? lsGet(['mittelalter_slot_index','mittelalterSlotIndex','slotIndex']) ?? boot.slotIndex ?? qp('slotIndex') ?? qp('slot'));
   const serverUrlRaw = (online.serverUrl || qp('serverUrl') || qp('server') || qp('ws') || qp('wss') || lsGet(['mittelalter_server_url','mittelalterServerUrl','serverUrl']) || boot.serverWs || boot.serverUrl || '').trim();
   if(!roomCode || !serverUrlRaw) return null;
   let wsUrl = serverUrlRaw;
@@ -764,7 +785,7 @@ function resolveOnlineContext(){
     wsUrl = wsUrl.replace(/^http/i, 'ws');
   }
   if(!/^wss?:\/\//i.test(wsUrl)) return null;
-  return { roomCode, playerId, sessionToken, playerName: playerName || 'Spieler', serverUrl: wsUrl };
+  return { roomCode, playerId, sessionToken, playerName: playerName || 'Spieler', slotIndex, serverUrl: wsUrl };
 }
 function isOnlineAuthorityActive(){
   return !!(online.enabled && online.connected && online.joined);
@@ -809,7 +830,8 @@ function updateOnlineDebugBadge(){
   const el = ensureOnlineDebugBadge();
   const lines = [];
   lines.push(`Online: ${onlineStateLabel()}`);
-  lines.push(`Raum: ${online.roomCode || '–'} | Spieler: ${online.playerId || '–'}`);
+  const slotLabel = online.slotIndex == null ? '–' : String(online.slotIndex + 1);
+  lines.push(`Raum: ${online.roomCode || '–'} | Spieler: ${online.playerId || '–'} | Slot: ${slotLabel}`);
   if(online.pendingAction){
     const age = online.pendingSince ? Math.max(0, Math.round((Date.now() - online.pendingSince)/1000)) : 0;
     lines.push(`Warte auf: ${online.pendingAction} (${age}s)`);
@@ -1219,6 +1241,7 @@ function connectOnlineAuthority(options={}){
   online.playerId = ctx.playerId || '';
   online.sessionToken = ctx.sessionToken || '';
   online.playerName = ctx.playerName;
+  online.slotIndex = normalizeOnlineSlotIndex(ctx.slotIndex);
   online.serverUrl = ctx.serverUrl;
   online.manualClose = false;
   persistOnlineIdentity();
@@ -1267,9 +1290,10 @@ function connectOnlineAuthority(options={}){
         roomCode: online.roomCode,
         playerId: online.playerId || '',
         sessionToken: online.sessionToken || '',
-        name: online.playerName || 'Spieler'
+        name: online.playerName || 'Spieler',
+        slotIndex: normalizeOnlineSlotIndex(online.slotIndex)
       };
-      pushOnlineTrace(`[SEND] join_room ${joinMsg.roomCode} ${joinMsg.playerId || 'fresh'}`);
+      pushOnlineTrace(`[SEND] join_room ${joinMsg.roomCode} ${joinMsg.playerId || 'fresh'}${joinMsg.slotIndex != null ? ` slot=${joinMsg.slotIndex + 1}` : ''}`);
       online.ws.send(JSON.stringify(joinMsg));
     }catch(err){
       console.warn('[ONLINE] join send failed', err);
@@ -1396,7 +1420,8 @@ function connectOnlineAuthority(options={}){
       if(/Raum nicht gefunden/i.test(msgText)){
         online.playerId = null;
         online.sessionToken = null;
-        persistOnlineIdentity({ playerId:'', sessionToken:'' });
+        online.slotIndex = null;
+        persistOnlineIdentity({ playerId:'', sessionToken:'', slotIndex:'' });
         updateOnlineDebugBadge();
         beginCrashSafeRecovery('room_missing');
         return;
