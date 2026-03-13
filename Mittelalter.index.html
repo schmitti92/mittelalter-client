@@ -137,41 +137,70 @@
     const params = new URLSearchParams(location.search);
     const roomFromUrl = (params.get('room') || '').trim().toUpperCase();
     const playerFromUrl = (params.get('player') || '').trim();
+    const hasUrlJoinIntent = !!(roomFromUrl && playerFromUrl);
 
-    const playerName =
-      safeGet(sessionStorage, 'playerName') ||
-      safeGet(localStorage, 'playerName') ||
-      playerFromUrl ||
-      packedSession.playerName ||
-      packedLocal.playerName ||
-      '';
-
-    const playerId =
-      safeGet(sessionStorage, 'playerId') ||
-      safeGet(localStorage, 'playerId') ||
-      safeGet(sessionStorage, 'mittelalter_player_id') ||
-      safeGet(localStorage, 'mittelalter_player_id') ||
-      packedSession.playerId ||
-      packedLocal.playerId ||
-      '';
-
-    const sessionToken =
-      safeGet(sessionStorage, 'mittelalter_session') ||
-      safeGet(localStorage, 'mittelalter_session') ||
-      safeGet(sessionStorage, 'mittelalter_session_token') ||
-      safeGet(localStorage, 'mittelalter_session_token') ||
-      packedSession.sessionToken ||
-      packedLocal.sessionToken ||
-      '';
-
-    const roomCode =
-      roomFromUrl ||
-      safeGet(sessionStorage, 'roomCode') ||
-      safeGet(localStorage, 'roomCode') ||
+    const canonicalRoomCode =
       safeGet(sessionStorage, 'mittelalter_room_code') ||
       safeGet(localStorage, 'mittelalter_room_code') ||
       packedSession.roomCode ||
       packedLocal.roomCode ||
+      safeGet(sessionStorage, 'roomCode') ||
+      safeGet(localStorage, 'roomCode') ||
+      '';
+
+    const canonicalPlayerName =
+      safeGet(sessionStorage, 'playerName') ||
+      safeGet(localStorage, 'playerName') ||
+      packedSession.playerName ||
+      packedLocal.playerName ||
+      playerFromUrl ||
+      '';
+
+    const canReuseIdentityFromStorage = !hasUrlJoinIntent || (
+      canonicalRoomCode === roomFromUrl &&
+      String(canonicalPlayerName || '').trim() === playerFromUrl
+    );
+
+    const playerName =
+      playerFromUrl ||
+      packedSession.playerName ||
+      packedLocal.playerName ||
+      safeGet(sessionStorage, 'playerName') ||
+      safeGet(localStorage, 'playerName') ||
+      '';
+
+    const playerId = canReuseIdentityFromStorage
+      ? (
+          safeGet(sessionStorage, 'mittelalter_player_id') ||
+          safeGet(localStorage, 'mittelalter_player_id') ||
+          packedSession.playerId ||
+          packedLocal.playerId ||
+          safeGet(sessionStorage, 'playerId') ||
+          safeGet(localStorage, 'playerId') ||
+          ''
+        )
+      : '';
+
+    const sessionToken = canReuseIdentityFromStorage
+      ? (
+          safeGet(sessionStorage, 'mittelalter_session_token') ||
+          safeGet(localStorage, 'mittelalter_session_token') ||
+          safeGet(sessionStorage, 'mittelalter_session') ||
+          safeGet(localStorage, 'mittelalter_session') ||
+          packedSession.sessionToken ||
+          packedLocal.sessionToken ||
+          ''
+        )
+      : '';
+
+    const roomCode =
+      roomFromUrl ||
+      safeGet(sessionStorage, 'mittelalter_room_code') ||
+      safeGet(localStorage, 'mittelalter_room_code') ||
+      packedSession.roomCode ||
+      packedLocal.roomCode ||
+      safeGet(sessionStorage, 'roomCode') ||
+      safeGet(localStorage, 'roomCode') ||
       '';
 
     const isHostRaw = safeGet(sessionStorage, 'isHost') || safeGet(localStorage, 'isHost');
@@ -191,12 +220,25 @@
       isHost,
       lastMode,
       serverHttp: SERVER_HTTP,
-      serverWs: SERVER_WS
+      serverWs: SERVER_WS,
+      hasUrlJoinIntent,
+      canReuseIdentityFromStorage
     };
   }
 
   const session = readLobbySession();
   window.MITTELALTER_SESSION = session;
+
+  if (session.hasUrlJoinIntent && !session.canReuseIdentityFromStorage) {
+    safeSet(sessionStorage, 'playerId', null);
+    safeSet(sessionStorage, 'mittelalter_player_id', null);
+    safeSet(sessionStorage, 'mittelalter_session', null);
+    safeSet(sessionStorage, 'mittelalter_session_token', null);
+    safeSet(localStorage, 'playerId', null);
+    safeSet(localStorage, 'mittelalter_player_id', null);
+    safeSet(localStorage, 'mittelalter_session', null);
+    safeSet(localStorage, 'mittelalter_session_token', null);
+  }
 
   safeSet(sessionStorage, 'playerName', session.playerName || '');
   safeSet(sessionStorage, 'roomCode', session.roomCode || '');
