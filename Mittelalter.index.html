@@ -7,9 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=EB+Garamond:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="Mittelalter.style.css?v=20260313-v8" />
+  <link rel="stylesheet" href="Mittelalter.style.css?v=20260313-v11" />
   <script>
-    window.BUILD_ID = "20260313-v7";
+    window.BUILD_ID = "20260313-v11";
   </script>
 </head>
 <body>
@@ -156,10 +156,12 @@
       playerFromUrl ||
       '';
 
-    const canReuseIdentityFromStorage = !hasUrlJoinIntent || (
-      canonicalRoomCode === roomFromUrl &&
-      String(canonicalPlayerName || '').trim() === playerFromUrl
-    );
+    const canonicalPlayerNameNorm = String(canonicalPlayerName || '').trim().toLowerCase();
+    const playerFromUrlNorm = String(playerFromUrl || '').trim().toLowerCase();
+    const sameRoomAsStored = !!roomFromUrl && !!canonicalRoomCode && canonicalRoomCode === roomFromUrl;
+    const samePlayerAsStored = !!playerFromUrlNorm && !!canonicalPlayerNameNorm && canonicalPlayerNameNorm === playerFromUrlNorm;
+
+    const canReuseIdentityFromStorage = !hasUrlJoinIntent || sameRoomAsStored || samePlayerAsStored;
 
     const playerName =
       playerFromUrl ||
@@ -229,16 +231,10 @@
   const session = readLobbySession();
   window.MITTELALTER_SESSION = session;
 
-  if (session.hasUrlJoinIntent && !session.canReuseIdentityFromStorage) {
-    safeSet(sessionStorage, 'playerId', null);
-    safeSet(sessionStorage, 'mittelalter_player_id', null);
-    safeSet(sessionStorage, 'mittelalter_session', null);
-    safeSet(sessionStorage, 'mittelalter_session_token', null);
-    safeSet(localStorage, 'playerId', null);
-    safeSet(localStorage, 'mittelalter_player_id', null);
-    safeSet(localStorage, 'mittelalter_session', null);
-    safeSet(localStorage, 'mittelalter_session_token', null);
-  }
+  // Stability Patch v11:
+  // Eine bestehende Spieler-ID / Session darf beim Öffnen über ?room= / ?player=
+  // NICHT automatisch gelöscht werden. Sonst verliert der Client seine Identität
+  // mitten im laufenden Spiel und der Server lehnt den Reconnect ab.
 
   safeSet(sessionStorage, 'playerName', session.playerName || '');
   safeSet(sessionStorage, 'roomCode', session.roomCode || '');
