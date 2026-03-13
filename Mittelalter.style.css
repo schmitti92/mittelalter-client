@@ -1,0 +1,479 @@
+/* Tablet-friendly UI */
+:root{
+  --bg:#0b0f14;
+  --panel:#0f1621;
+  --panel2:#0c131d;
+  --text:#e8eef7;
+  --muted:#a7b3c7;
+  --line:rgba(255,255,255,.08);
+  --good:#41d17a;
+  --warn:#ffcc66;
+  --bad:#ff6b6b;
+  --accent:#7c5cff;
+}
+
+*{ box-sizing:border-box; }
+html,body{ height:100%; margin:0; background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+
+.topbar{
+  display:flex; gap:12px; align-items:center; justify-content:space-between;
+  padding:10px 12px; border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg, rgba(124,92,255,.14), rgba(0,0,0,0));
+  position:sticky; top:0; z-index:5;
+}
+.title .h1{ font-weight:800; letter-spacing:.2px; font-size:16px; }
+.title .h2{ font-size:12px; color:var(--muted); margin-top:2px; }
+
+.controls{ display:flex; align-items:center; gap:10px; }
+.btn{
+  border:1px solid var(--line); background:var(--panel);
+  color:var(--text); padding:10px 12px; border-radius:12px;
+  font-weight:700; letter-spacing:.2px;
+  touch-action:manipulation;
+}
+.btn.primary{ background:rgba(124,92,255,.22); border-color:rgba(124,92,255,.35); }
+.btn.secondary{ background:rgba(255,255,255,.06); }
+.btn:active{ transform:translateY(1px); }
+
+.die{
+  min-width:44px; height:40px; display:grid; place-items:center;
+  border-radius:12px; border:1px solid var(--line);
+  background:rgba(0,0,0,.2);
+  font-size:18px; font-weight:900;
+}
+
+.main{
+  display:grid;
+  grid-template-columns: 1fr 280px;
+  height: calc(100% - 62px);
+}
+@media (max-width: 980px){
+  .main{ grid-template-columns: 1fr; grid-template-rows: 1fr auto; height:auto; }
+  .sidebar{ position:relative; width:100%; }
+}
+
+.canvasWrap{ position:relative; min-height: 60vh; }
+#boardCanvas{
+  width:100%; height:100%;
+  display:block;
+  touch-action:none; /* we implement our own pan/zoom */
+  background:
+    radial-gradient(circle at 50% 30%, rgba(124,92,255,.12), rgba(0,0,0,0) 55%),
+    radial-gradient(circle at 30% 70%, rgba(65,209,122,.08), rgba(0,0,0,0) 60%),
+    linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,0));
+}
+
+.hint{
+  position:absolute; left:10px; bottom:10px;
+  padding:10px 12px; border-radius:14px;
+  background:rgba(10,15,22,.72);
+  border:1px solid var(--line);
+  color:var(--muted);
+  font-size:12px;
+  backdrop-filter: blur(8px);
+  max-width:min(520px, 92vw);
+}
+
+.sidebar{
+  border-left:1px solid var(--line);
+  background:linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,0));
+  padding:10px;
+}
+.card{
+  background:rgba(15,22,33,.75);
+  border:1px solid var(--line);
+  border-radius:16px;
+  padding:12px;
+  margin-bottom:10px;
+}
+.cardTitle{
+  font-weight:900;
+  font-size:13px;
+  margin-bottom:10px;
+  color:#dfe7ff;
+}
+.kv{ display:grid; grid-template-columns: 1fr 1fr; gap:8px 10px; font-size:12px; }
+.kv div:nth-child(odd){ color:var(--muted); }
+.small{ font-size:12px; color:var(--muted); line-height:1.35; }
+
+/* Joker sidebar */
+.jokerGrid{
+  display:grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.jokerBtn{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 10px;
+  width:100%;
+  padding: 10px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.18);
+  background: rgba(0,0,0,.22);
+  color: rgba(255,255,255,.92);
+  font-family: "Cinzel", serif;
+  font-weight: 900;
+  letter-spacing: .2px;
+  font-size: 12px;
+  cursor:pointer;
+}
+
+.jokerBtn:active{ transform: translateY(1px); }
+
+.jokerBtn[disabled]{
+  opacity: .45;
+  cursor:not-allowed;
+}
+
+.jokerBtn.on{
+  outline: 2px solid rgba(255, 209, 102, .65);
+  box-shadow: 0 0 0 3px rgba(255, 209, 102, .15);
+}
+
+.jokerCount{
+  min-width: 28px;
+  text-align:center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.14);
+  font-family: "EB Garamond", serif;
+  font-weight: 800;
+  font-size: 14px;
+}
+
+
+/* Boss sidebar */
+.bossWrap{ display:block; }
+.bossEmpty{
+  font-size:12px;
+  color: var(--muted);
+  padding: 10px 10px;
+  border-radius: 14px;
+  border: 1px dashed rgba(255,255,255,.18);
+  background: rgba(0,0,0,.16);
+  text-align:center;
+}
+.bossList{ display:grid; grid-template-columns:1fr; gap:10px; }
+.bossCard{
+  display:grid;
+  grid-template-columns: 56px 1fr;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.18);
+  background: rgba(0,0,0,.22);
+}
+.bossAvatar{
+  width:56px; height:56px;
+  border-radius: 16px;
+  display:flex; align-items:center; justify-content:center;
+  border: 1px solid rgba(255,255,255,.18);
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255,107,107,.20), rgba(0,0,0,.10) 60%),
+    radial-gradient(circle at 70% 70%, rgba(124,92,255,.18), rgba(0,0,0,.10) 62%);
+  box-shadow: 0 10px 22px rgba(0,0,0,.35) inset, 0 10px 20px rgba(0,0,0,.25);
+}
+.bossAvatar svg{ width:34px; height:34px; opacity:.92; }
+.bossMeta{ min-width:0; }
+.bossName{
+  font-family: "Cinzel", serif;
+  font-weight: 900;
+  font-size: 12px;
+  color: rgba(255,255,255,.92);
+  letter-spacing: .25px;
+}
+.bossPos{
+  margin-top: 2px;
+  font-size: 12px;
+  color: rgba(255,255,255,.70);
+}
+.bossProps{
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height:1.35;
+}
+.bossProps ul{ margin: 6px 0 0 16px; padding:0; }
+.bossProps li{ margin: 2px 0; }
+
+
+.legend .row{ display:flex; align-items:center; gap:10px; margin:8px 0; font-size:12px; color:var(--muted); }
+.dot{ width:12px; height:12px; border-radius:50%; border:1px solid rgba(255,255,255,.12); display:inline-block; }
+.dot.normal{ background:rgba(255,255,255,.12); }
+.dot.start{ background:rgba(65,209,122,.5); }
+.dot.barricade{ background:rgba(255,204,102,.55); }
+.dot.obstacle{ background:rgba(255,107,107,.55); }
+.dot.portal{ background:rgba(124,92,255,.55); }
+.dot.boss{ background:rgba(255,107,107,.35); outline:2px solid rgba(255,107,107,.25); }
+
+
+
+/* Spieleranzahl */
+.pc{ display:flex; align-items:center; gap:8px; padding:0 6px; }
+.pcLabel{ font:600 12px system-ui,-apple-system,Segoe UI,Roboto,Arial; opacity:.8; }
+.pcSelect{
+  height:38px;
+  border-radius:12px;
+  padding:0 10px;
+  background:rgba(255,255,255,.10);
+  border:1px solid rgba(255,255,255,.14);
+  color:rgba(240,245,255,.92);
+  outline:none;
+}
+.pcSelect:focus{ border-color:rgba(120,200,255,.55); box-shadow:0 0 0 3px rgba(120,200,255,.18); }
+
+
+/* =========================
+   Medieval Theme: Old Map
+   ========================= */
+:root{
+  --ink: rgba(40,28,18,.92);
+  --inkSoft: rgba(40,28,18,.70);
+  --parchment1: #f3e7c9;
+  --parchment2: #ead8ab;
+  --parchment3: #ddc58f;
+  --wood1:#6a4a2f;
+  --wood2:#4f3623;
+  --gold:#c8a64b;
+  --seal:#8b1f24;
+}
+
+/* Page background: parchment + vignette + subtle “map lines” */
+body{
+  background:
+    radial-gradient(1200px 900px at 50% 38%, rgba(255,255,255,.55), rgba(255,255,255,0) 55%),
+    radial-gradient(1200px 900px at 50% 38%, rgba(0,0,0,.22), rgba(0,0,0,0) 58%),
+    radial-gradient(1400px 1100px at 50% 45%, rgba(0,0,0,.32), rgba(0,0,0,0) 58%),
+    repeating-linear-gradient(90deg, rgba(70,55,38,.05), rgba(70,55,38,.05) 1px, rgba(0,0,0,0) 1px, rgba(0,0,0,0) 26px),
+    repeating-linear-gradient(0deg, rgba(70,55,38,.03), rgba(70,55,38,.03) 1px, rgba(0,0,0,0) 1px, rgba(0,0,0,0) 34px),
+    radial-gradient(1600px 1100px at 50% 38%, var(--parchment1) 0%, var(--parchment2) 58%, var(--parchment3) 100%);
+  color: var(--ink);
+  font-family: ui-serif, Georgia, "Times New Roman", Times, serif;
+}
+
+/* Top panel / controls -> wood + brass */
+#topBar, .topBar, .panel, #sidePanel{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.08)),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.05), rgba(255,255,255,.05) 6px, rgba(0,0,0,.04) 6px, rgba(0,0,0,.04) 14px),
+    linear-gradient(180deg, var(--wood1), var(--wood2));
+  border: 1px solid rgba(0,0,0,.35);
+  box-shadow: 0 18px 45px rgba(0,0,0,.25);
+}
+
+button, .btn{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.10), rgba(0,0,0,.18)),
+    linear-gradient(180deg, #8b6a3f, #5d4327);
+  border: 1px solid rgba(0,0,0,.45);
+  color: rgba(255,250,235,.92);
+  border-radius: 12px;
+  text-shadow: 0 1px 0 rgba(0,0,0,.45);
+}
+
+button:hover, .btn:hover{
+  filter: brightness(1.05);
+}
+
+select, input{
+  background: rgba(255,250,235,.75);
+  border: 1px solid rgba(0,0,0,.35);
+  border-radius: 10px;
+  color: var(--ink);
+}
+
+/* Status line like an ink label */
+#statusLine{
+  color: rgba(255,250,235,.92);
+  text-shadow: 0 1px 0 rgba(0,0,0,.55);
+}
+
+/* Canvas frame like an old map */
+#boardCanvas{
+  background:
+    radial-gradient(900px 600px at 50% 45%, rgba(255,255,255,.55), rgba(255,255,255,0) 60%),
+    radial-gradient(1000px 700px at 50% 45%, rgba(0,0,0,.18), rgba(0,0,0,0) 58%),
+    radial-gradient(1000px 700px at 50% 45%, var(--parchment1) 0%, var(--parchment2) 62%, var(--parchment3) 100%);
+  border: 10px solid rgba(60,45,30,.55);
+  border-radius: 18px;
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,.12), 0 22px 55px rgba(0,0,0,.25);
+}
+
+/* Debug console toggle – make it less “sci-fi” */
+#osConsoleToggle{
+  background: rgba(60,45,30,.55) !important;
+  border: 1px solid rgba(0,0,0,.35) !important;
+}
+
+
+
+/* =========================
+   THEME: Holz-Tisch + Pergament-Panels (wie vorher)
+   (nur Design-Overrides, keine Layout-Änderung)
+   ========================= */
+:root{
+  --bg: #3b2a1d;            /* base wood */
+  --panel: rgba(245,232,196,.92);   /* parchment panels */
+  --panel2: rgba(235,219,182,.90);
+  --text: rgba(38,26,18,.92);       /* ink */
+  --muted: rgba(38,26,18,.70);
+  --line: rgba(0,0,0,.16);
+  --accent: #8b1f24;        /* wax red accent */
+}
+
+/* Wood table background */
+html,body{
+  background:
+    radial-gradient(1200px 900px at 50% 35%, rgba(255,255,255,.12), rgba(255,255,255,0) 55%),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.035), rgba(255,255,255,.035) 6px, rgba(0,0,0,.05) 6px, rgba(0,0,0,.05) 14px),
+    linear-gradient(180deg, rgba(0,0,0,.22), rgba(0,0,0,.12)),
+    linear-gradient(90deg, #3b2a1d 0%, #4b3423 50%, #3b2a1d 100%) !important;
+  color: var(--text);
+  font-family: ui-serif, Georgia, "Times New Roman", Times, serif;
+}
+
+/* Topbar subtle */
+.topbar{
+  background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(0,0,0,.10)) !important;
+  border-bottom: 1px solid rgba(0,0,0,.22) !important;
+}
+
+/* Panels -> parchment */
+.panel{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.45), rgba(0,0,0,0) 42%),
+    linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%) !important;
+  border: 1px solid rgba(0,0,0,.18) !important;
+  box-shadow: 0 14px 30px rgba(0,0,0,.18) !important;
+}
+
+/* Buttons -> wood-ish */
+button{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.18), rgba(0,0,0,.18)),
+    linear-gradient(180deg, #6a4a2f, #4f3623) !important;
+  border: 1px solid rgba(0,0,0,.35) !important;
+  color: rgba(255,250,235,.92) !important;
+  text-shadow: 0 1px 0 rgba(0,0,0,.45);
+}
+
+/* Canvas: keep your current board look (no giant spotlight) */
+#boardCanvas{
+  background: rgba(0,0,0,0) !important;
+}
+
+/* Side panel headings readable */
+.panel h3, .panel .title{
+  color: rgba(38,26,18,.92) !important;
+}
+
+/* ================================
+   Readability + Dice Boost (v1)
+   - makes top text and dice clearly readable
+   - improves sidebar contrast
+   - NO gameplay logic touched
+================================= */
+
+.topbar{
+  /* slightly stronger separation from patterned background */
+  background:
+    linear-gradient(180deg, rgba(0,0,0,.35), rgba(0,0,0,.15)),
+    inherit;
+}
+
+.title .h1{
+  font-size: 20px;
+  font-weight: 900;
+  color: rgba(255,250,235,.96);
+  text-shadow: 0 2px 0 rgba(0,0,0,.45), 0 0 12px rgba(0,0,0,.35);
+}
+
+.title .h2{
+  font-size: 15px;
+  font-weight: 700;
+  color: rgba(255,250,235,.88);
+  text-shadow: 0 1px 0 rgba(0,0,0,.45);
+}
+
+/* Bigger, clearer dice */
+.die, #dieBox{
+  min-width: 84px;
+  height: 64px;
+  border-radius: 14px;
+  border: 2px solid rgba(255, 215, 0, .70);
+  background:
+    radial-gradient(circle at 35% 30%, rgba(255,255,255,.20), rgba(255,255,255,0) 45%),
+    radial-gradient(circle at 50% 60%, rgba(255,215,0,.18), rgba(0,0,0,.55) 60%),
+    linear-gradient(180deg, rgba(0,0,0,.10), rgba(0,0,0,.35));
+  font-size: 36px;
+  font-weight: 950;
+  color: #ffffff;
+  text-shadow: 0 2px 0 rgba(0,0,0,.55);
+  box-shadow: 0 0 22px rgba(255,215,0,.35), 0 10px 25px rgba(0,0,0,.35);
+}
+
+/* Buttons more legible */
+.btn{
+  font-size: 16px;
+  font-weight: 800;
+  padding: 12px 16px;
+  border-radius: 12px;
+  text-shadow: 0 1px 0 rgba(0,0,0,.55);
+}
+
+.btn.primary{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.10), rgba(0,0,0,.18)),
+    linear-gradient(180deg, rgba(124,92,255,.55), rgba(124,92,255,.22));
+  border-color: rgba(124,92,255,.65);
+}
+
+.btn.secondary{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.10), rgba(0,0,0,.22)),
+    rgba(255,255,255,.10);
+  border-color: rgba(255,255,255,.22);
+}
+
+/* Sidebar / cards: more contrast + larger text */
+.sidebar{
+  background: rgba(10, 15, 25, 0.78);
+  backdrop-filter: blur(8px);
+}
+
+.card{
+  background: rgba(10, 15, 25, 0.80);
+  border: 1px solid rgba(255,255,255,.10);
+  box-shadow: 0 10px 25px rgba(0,0,0,.35);
+}
+
+.cardTitle{
+  font-size: 16px;
+  font-weight: 950;
+  color: rgba(255, 215, 0, .95);
+  text-shadow: 0 1px 0 rgba(0,0,0,.55);
+}
+
+.kv{
+  font-size: 14px;
+}
+
+#curPlayer, #curPhase, #reserveInfo{
+  font-size: 14px;
+  font-weight: 700;
+  color: rgba(255,250,235,.92);
+}
+
+/* Tablet: even bigger */
+@media (max-width: 900px){
+  .title .h1{ font-size: 22px; }
+  .title .h2{ font-size: 16px; }
+  .btn{ font-size: 18px; padding: 14px 18px; }
+  .die, #dieBox{ min-width: 92px; height: 72px; font-size: 44px; }
+  .cardTitle{ font-size: 18px; }
+  .kv{ font-size: 15px; }
+}

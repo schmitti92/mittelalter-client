@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>Mittelalter – Prototyp</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=EB+Garamond:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="Mittelalter.style.css?v=20260301-005031" />
+<script>
+  window.BUILD_ID = "20260301-005031";
+</script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="title">
+      <div class="h1">Mittelalter – Prototyp</div>
+      <div class="h2" id="statusLine">Lade Board…</div>
+    </div>
+
+    <div class="controls">
+      <button id="btnFit" class="btn secondary" title="Ansicht zentrieren">Zentrieren</button>
+      <button id="btnRoll" class="btn primary">🎲 Würfeln</button>
+      <div class="pc">
+        <span class="pcLabel">Spieler</span>
+        <select id="playerCount" class="pcSelect" aria-label="Spieleranzahl">
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4" selected>4</option>
+        </select>
+      </div>
+      <div class="die" id="dieBox" aria-label="Würfelwert">–</div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="canvasWrap">
+      <canvas id="boardCanvas"></canvas>
+      <div class="hint" id="hint">
+        • Tippe eine Figur deiner Farbe an → dann ein leuchtendes Zielfeld.<br/>
+        • Bei <b>6</b> darfst du nochmal würfeln.<br/>
+        • Gegnerische Figuren können rausgeworfen werden.<br/>
+        • 🎯 Zielpunkte: Wer zuerst <b>10</b> gesammelt hat, gewinnt.<br/>
+        • Nie direkt zurück aufs Feld, wo die Figur vorher stand.
+      </div>
+    </div>
+
+    <aside class="sidebar" id="sidebar">
+      <div class="card">
+        <div class="cardTitle">Zug</div>
+        <div class="kv">
+          <div>Spieler</div><div id="curPlayer">–</div>
+          <div>Phase</div><div id="curPhase">–</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="cardTitle">Legende</div>
+        <div class="legend">
+          <div class="row"><span class="dot normal"></span> Normal</div>
+          <div class="row"><span class="dot start"></span> Start</div>
+          <div class="row"><span class="dot barricade"></span> Barrikade</div>
+          <div class="row"><span class="dot obstacle"></span> Hindernis (minRoll)</div>
+          <div class="row"><span class="dot portal"></span> Portal</div>
+          <div class="row"><span class="dot boss"></span> Boss</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="cardTitle">Rausgeworfen (Reserve)</div>
+        <div class="small" id="reserveInfo">–</div>
+      </div>
+
+      <div class="card" id="jokerCard">
+        <div class="cardTitle">Joker</div>
+        <div class="jokerGrid" id="jokerButtons"></div>
+        <div class="small" id="jokerHint">–</div>
+      </div>
+
+
+      <div class="card" id="bossCard">
+        <div class="cardTitle">Boss</div>
+        <div class="bossWrap" id="bossWrap">
+          <div class="bossEmpty" id="bossEmpty">Kein Boss aktiv</div>
+          <div class="bossList" id="bossList"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="cardTitle">Bedienung</div>
+        <div class="small">
+          • 1 Finger ziehen = Board verschieben<br/>
+          • Pinch / Mausrad = Zoom<br/>
+          • Doppeltipp = zentrieren
+        </div>
+      </div>
+    </aside>
+  </main>
+
+
+  <div id="onlineBadge" style="position:fixed;left:12px;bottom:12px;z-index:9999;background:rgba(14,22,38,.92);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.35);font:14px/1.35 Arial,Helvetica,sans-serif;backdrop-filter:blur(6px);max-width:280px">
+    <div style="font-weight:700;margin-bottom:4px">Lobby-Info</div>
+    <div id="onlineBadgeText">Prüfe Lobby-Daten…</div>
+  </div>
+  <script>
+(function () {
+  const SERVER_HTTP = 'https://mittelalter-server.onrender.com';
+  const SERVER_WS = SERVER_HTTP.replace(/^http/i, 'ws');
+
+  function safeGet(storage, key) {
+    try {
+      return storage.getItem(key) || '';
+    } catch (err) {
+      return '';
+    }
+  }
+
+  function safeSet(storage, key, value) {
+    try {
+      storage.setItem(key, value);
+    } catch (err) {}
+  }
+
+  function readPacked(storage, key) {
+    try {
+      return JSON.parse(storage.getItem(key) || '{}') || {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function readLobbySession() {
+    const packedSession = readPacked(sessionStorage, 'mittelalterLobby');
+    const packedLocal = readPacked(localStorage, 'mittelalterLobby');
+    const params = new URLSearchParams(location.search);
+    const roomFromUrl = (params.get('room') || '').trim().toUpperCase();
+    const playerFromUrl = (params.get('player') || '').trim();
+
+    const playerName =
+      safeGet(sessionStorage, 'playerName') ||
+      safeGet(localStorage, 'playerName') ||
+      playerFromUrl ||
+      packedSession.playerName ||
+      packedLocal.playerName ||
+      '';
+
+    const playerId =
+      safeGet(sessionStorage, 'playerId') ||
+      safeGet(localStorage, 'playerId') ||
+      packedSession.playerId ||
+      packedLocal.playerId ||
+      '';
+
+    const roomCode =
+      roomFromUrl ||
+      safeGet(sessionStorage, 'roomCode') ||
+      safeGet(localStorage, 'roomCode') ||
+      packedSession.roomCode ||
+      packedLocal.roomCode ||
+      '';
+
+    const isHostRaw = safeGet(sessionStorage, 'isHost') || safeGet(localStorage, 'isHost');
+    const isHost = isHostRaw ? isHostRaw === 'true' : !!(packedSession.isHost || packedLocal.isHost);
+    const lastMode =
+      safeGet(sessionStorage, 'mittelalterLastMode') ||
+      safeGet(localStorage, 'mittelalterLastMode') ||
+      packedSession.lastMode ||
+      packedLocal.lastMode ||
+      'online';
+
+    return {
+      playerName: String(playerName || '').trim(),
+      playerId: String(playerId || '').trim(),
+      roomCode: String(roomCode || '').trim().toUpperCase(),
+      isHost,
+      lastMode,
+      serverHttp: SERVER_HTTP,
+      serverWs: SERVER_WS
+    };
+  }
+
+  const session = readLobbySession();
+  window.MITTELALTER_SESSION = session;
+
+  safeSet(sessionStorage, 'playerName', session.playerName || '');
+  safeSet(sessionStorage, 'roomCode', session.roomCode || '');
+  safeSet(sessionStorage, 'playerId', session.playerId || '');
+  safeSet(sessionStorage, 'isHost', session.isHost ? 'true' : 'false');
+  safeSet(sessionStorage, 'mittelalterLastMode', session.lastMode || 'online');
+  safeSet(sessionStorage, 'mittelalterServerHttp', SERVER_HTTP);
+  safeSet(sessionStorage, 'mittelalterServerWs', SERVER_WS);
+
+  safeSet(localStorage, 'playerName', session.playerName || '');
+  safeSet(localStorage, 'roomCode', session.roomCode || '');
+  safeSet(localStorage, 'playerId', session.playerId || '');
+  safeSet(localStorage, 'isHost', session.isHost ? 'true' : 'false');
+  safeSet(localStorage, 'mittelalterLastMode', session.lastMode || 'online');
+  safeSet(localStorage, 'mittelalterServerHttp', SERVER_HTTP);
+  safeSet(localStorage, 'mittelalterServerWs', SERVER_WS);
+
+  const packed = {
+    playerName: session.playerName,
+    roomCode: session.roomCode,
+    playerId: session.playerId,
+    isHost: session.isHost,
+    lastMode: session.lastMode,
+    serverHttp: SERVER_HTTP,
+    serverWs: SERVER_WS
+  };
+  safeSet(sessionStorage, 'mittelalterLobby', JSON.stringify(packed));
+  safeSet(localStorage, 'mittelalterLobby', JSON.stringify(packed));
+
+  console.log('[Mittelalter] Spieler:', session.playerName);
+  console.log('[Mittelalter] Raum:', session.roomCode);
+  console.log('[Mittelalter] Host:', session.isHost);
+  console.log('[Mittelalter] Modus:', session.lastMode);
+
+  if (!session.playerName || !session.roomCode) {
+    alert('Lobby nicht korrekt gestartet. Du wirst zurück zur Mittelalter-Lobby geleitet.');
+    window.location.href = 'Mittelalter.lobby.html';
+    return;
+  }
+
+  const badge = document.getElementById('onlineBadgeText');
+  if (badge) {
+    badge.innerHTML =
+      'Spieler: <b>' + session.playerName + '</b><br>' +
+      'Raum: <b>' + session.roomCode + '</b><br>' +
+      'ID: <b>' + (session.playerId || '–') + '</b><br>' +
+      'Rolle: <b>' + (session.isHost ? 'Host' : 'Mitspieler') + '</b><br>' +
+      'Modus: <b>' + (session.lastMode === 'online' ? 'Online' : 'Offline-Test') + '</b>';
+  }
+
+  const NativeWebSocket = window.WebSocket;
+  if (NativeWebSocket && !window.__mittelalterAutoJoinPatched) {
+    window.__mittelalterAutoJoinPatched = true;
+
+    function WrappedWebSocket(url, protocols) {
+      const ws = protocols !== undefined ? new NativeWebSocket(url, protocols) : new NativeWebSocket(url);
+      const targetUrl = String(url || '');
+      const isMittelalterSocket =
+        targetUrl.includes('mittelalter-server') ||
+        targetUrl.includes('onrender.com') ||
+        targetUrl === SERVER_WS;
+
+      if (isMittelalterSocket) {
+        let joined = false;
+        ws.addEventListener('open', function () {
+          if (joined) return;
+          joined = true;
+          try {
+            const payload = {
+              type: 'join_room',
+              roomCode: session.roomCode,
+              playerId: session.playerId,
+              name: session.playerName
+            };
+            ws.send(JSON.stringify(payload));
+            console.log('[Mittelalter] Auto-Join gesendet:', payload);
+          } catch (err) {
+            console.warn('[Mittelalter] Auto-Join fehlgeschlagen:', err);
+          }
+        });
+      }
+      return ws;
+    }
+
+    WrappedWebSocket.prototype = NativeWebSocket.prototype;
+    Object.setPrototypeOf(WrappedWebSocket, NativeWebSocket);
+    window.WebSocket = WrappedWebSocket;
+  }
+})();
+  </script>
+
+  <script src="Mittelalter.game.js?v=251"></script>
+</body>
+</html>
