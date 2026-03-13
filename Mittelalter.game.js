@@ -697,18 +697,23 @@ function requestServerRoll(reason='main'){
   });
 }
 function broadcastTurnStateOnline(infoText){
-  // Stability Patch v5b:
-  // Der Server ist Chef für Turn-Ende / Boss-Phase / Snapshot-Fortschritt.
-  // finish_move und turn_update waren nur Soft-Sync-Pfade und dürfen online
-  // keine Spiellogik mehr antreiben. Wir behalten die Funktion als zentrale
-  // Stelle für lokale UI-Hinweise/Tracing, senden aber absichtlich KEINE
-  // zusätzlichen Abschluss-Pakete mehr an den Server.
   if(!isOnlineAuthorityActive()) return;
   if(online.suppressTurnBroadcast) return;
 
-  const phase = String(state.phase || 'needRoll');
-  const turnIndex = Number(state.turn || 0);
-  pushOnlineTrace(`[TURN_UI] phase=${phase} turn=${turnIndex}${infoText ? ` | ${String(infoText)}` : ''}`);
+  const payload = {
+    turnIndex: Number(state.turn || 0),
+    phase: String(state.phase || 'needRoll'),
+    info: infoText || null
+  };
+
+  if(online.authoritativeMoveActorId){
+    if(online.playerId !== online.authoritativeMoveActorId) return;
+    payload.stateSnapshot = buildFullSyncSnapshot();
+    sendServerAction('finish_move', payload);
+    return;
+  }
+
+  sendServerAction('turn_update', payload);
 }
 
 function buildFullSyncSnapshot(){
@@ -903,10 +908,6 @@ function applyAuthoritativeMove(moveMsg, snapshot){
 
   if(snap){
     applyServerSnapshot(snap, { silentDraw:true });
-    const serverPhase = String(snap.phase || 'resolveMove');
-    if(serverPhase === 'needRoll' || serverPhase === 'placeBarricade' || serverPhase === 'gameOver'){
-      online.authoritativeMoveActorId = null;
-    }
     state.selected = null;
     state.highlighted.clear();
     state.placeHighlighted.clear();
@@ -981,12 +982,11 @@ function connectOnlineAuthority(){
     }
     if(type === 'room_joined' || type === 'room_created'){
       online.joined = true;
-      online.authoritativeMoveActorId = null;
       if(msg.self?.playerId) online.playerId = msg.self.playerId;
       if(msg.room) applyServerRoomState(msg.room, { forceNeedRoll:false, silentDraw:false });
-      // Stability Patch v5b:
-      // Kein turn_update mehr direkt nach Join/Reconnect senden.
-      // Der Server liefert den autoritativen Zustand über room_state/sync_request.
+      if(sendServerAction('turn_update', { turnIndex:Number(state.turn||0), phase:String(state.phase||'needRoll') })){
+        // only as soft sync for reconnect; server validates later on real actions
+      }
       try{ online.ws.send(JSON.stringify({ type:'sync_request' })); }catch(_){ }
       return;
     }
@@ -2786,250 +2786,224 @@ const FORCE_EVENT_CARD_ID = null;
 let eventForceCardId = null; // UI: forced event card (persistent until changed)
 
 const EVENT_DECK = [
-  {
+{ 
     id:"joker_pick6",
     title:"Zufälliger Joker",
     text:"Wähle 1 von 6 Karten – du bekommst den Joker dahinter.",
-    effect:"joker_pick6",
-    count:50
+    effect:"joker_pick6"
   },
   {
     id:"joker_wheel",
     title:"Joker-Glücksrad",
     text:"Drehe das Glücksrad: Erst Joker, dann Anzahl (1–3).",
-    effect:"joker_wheel",
-    count:10
+    effect:"joker_wheel"
   },
   {
     id:"jokers_all6",
     title:"Alle 6 Joker",
     text:"Du erhältst +1 von jedem Joker (6 Stück).",
-    effect:"jokers_all6",
-    count:1
+    effect:"jokers_all6"
   },
   {
     id:"joker_rain",
     title:"Joker-Regen",
     text:"Alle anderen Spieler erhalten 2 zufällige Joker.",
-    effect:"joker_rain",
-    count:10
+    effect:"joker_rain"
   },
   {
     id:"shuffle_pieces",
     title:"Figuren mischen",
     text:"Alle Spielfiguren (außer Start, Schild, Portal) werden neu gemischt.",
-    effect:"shuffle_pieces",
-    count:1
+    effect:"shuffle_pieces"
   },
   {
     id:"start_spawn",
     title:"Startfeld-Spawn",
     text:"Alle Figuren auf Startfeldern werden nacheinander (0,5s) auf freie Felder verteilt.",
-    effect:"start_spawn",
-    count:1
+    effect:"start_spawn"
   },
   {
     id:"spawn_barricades3",
     title:"Barrikaden-Verstärkung",
     text:"3 zusätzliche Barrikaden erscheinen (auch auf Ereignis- & Siegpunktfeldern).",
-    effect:"spawn_barricades3",
-    count:5
+    effect:"spawn_barricades3"
   },
   {
     id:"spawn_barricades10",
     title:"Barrikaden-Invasion",
     text:"10 zusätzliche Barrikaden erscheinen (auch auf Ereignis- & Siegpunktfeldern).",
-    effect:"spawn_barricades10",
-    count:1
+    effect:"spawn_barricades10"
   },
   {
     id:"spawn_barricades5",
     title:"Barrikaden-Nachschub",
     text:"5 zusätzliche Barrikaden erscheinen (auch auf Ereignis- & Siegpunktfeldern).",
-    effect:"spawn_barricades5",
-    count:3
+    effect:"spawn_barricades5"
   },
   {
     id:"move_barricade1",
     title:"Barrikade versetzen",
     text:"Du musst 1 Barrikade auf ein anderes Feld versetzen.",
-    effect:"move_barricade1",
-    count:5
+    effect:"move_barricade1"
   },
   {
     id:"move_barricade2",
     title:"Zwei Barrikaden versetzen",
     text:"Du musst 2 Barrikaden auf andere Felder versetzen.",
-    effect:"move_barricade2",
-    count:3
+    effect:"move_barricade2"
   },
   {
     id:"barricades_reset_initial",
     title:"Barrikaden-Reset",
     text:"Alle Barrikaden werden auf die Startpositionen zurückgesetzt (gleiche Anzahl).",
-    effect:"barricades_reset_initial",
-    count:5
-  },
+    effect:"barricades_reset_initial"
+  }
+,
   {
     id:"barricades_shuffle",
     title:"Barrikaden mischen",
     text:"Alle Barrikaden werden neu gemischt und auf neue Felder verteilt.",
-    effect:"barricades_shuffle",
-    count:1
+    effect:"barricades_shuffle"
   },
   {
     id:"barricades_on_event_and_goal",
     title:"Barrikaden-Invasion",
     text:"Auf jedes Ereignisfeld und auf das Zielfeld wird je 1 zusätzliche Barrikade platziert.",
-    effect:"barricades_on_event_and_goal",
-    count:2
+    effect:"barricades_on_event_and_goal"
   },
   {
     id:"barricades_half_remove",
     title:"Barrikaden verfallen",
     text:"Die Hälfte aller Barrikaden verschwindet vom Brett.",
-    effect:"barricades_half_remove",
-    count:2
+    effect:"barricades_half_remove"
   },
   {
     id:"barricade_jump_reroll",
     title:"Sturmangriff",
     text:"Du darfst nochmal würfeln. Für diesen ganzen Zug darfst du Barrikaden auf dem Weg überspringen. Landest du auf einer Barrikade, sammelst du sie ein und darfst sie neu platzieren.",
-    effect:"barricade_jump_reroll",
-    count:4
+    effect:"barricade_jump_reroll"
   },
   {
     id:"spawn_one_boss",
     title:"Ein Boss erscheint",
     text:"Ein zufälliger Boss erscheint auf einem freien Bossfeld. Maximal 2 Bosse gleichzeitig.",
-    effect:"spawn_one_boss",
-    count:5
+    effect:"spawn_one_boss"
   },
   {
     id:"spawn_two_bosses",
     title:"Zwei Bosse erscheinen",
     text:"Bis zu zwei zufällige Bosse erscheinen auf freien Bossfeldern. Maximal 2 Bosse insgesamt.",
-    effect:"spawn_two_bosses",
-    count:1
+    effect:"spawn_two_bosses"
   },
   {
     id:"extra_roll_event",
     title:"Du darfst nochmal würfeln",
     text:"Du darfst sofort noch einmal würfeln.",
-    effect:"extra_roll_event",
-    count:3
+    effect:"extra_roll_event"
   },
   {
     id:"all_to_start",
     title:"Alle zurück zum Start",
     text:"Alle Spieler müssen zurück auf ihre Startfelder.",
-    effect:"all_to_start",
-    count:1
+    effect:"all_to_start"
   },
   {
     id:"lose_all_jokers",
     title:"Du verlierst alle Joker",
     text:"Alle Joker deines Teams gehen verloren.",
-    effect:"lose_all_jokers",
-    count:1
+    effect:"lose_all_jokers"
   },
   {
     id:"respawn_all_events",
     title:"Ereignisfelder neu",
     text:"Alle 6 Ereignisfelder werden nacheinander neu gespawnt.",
-    effect:"respawn_all_events",
-    count:2
-  },
+    effect:"respawn_all_events"
+  }
+  ,
   {
     id:"spawn_double_goal",
     title:"Doppel-Zielfeld",
     text:"Ein zusätzliches Zielfeld mit doppelten Punkten erscheint. Es ist einmalig und spawnt nach dem Einsammeln nicht neu.",
-    effect:"spawn_double_goal",
-    count:3
-  },
+    effect:"spawn_double_goal"
+  }
+  ,
   {
     id:"dice_duel",
     title:"Würfel-Duell",
     text:"Alle würfeln automatisch. Der niedrigste Wurf gibt dem höchsten Wurf 1 zufälligen Joker. Bei Gleichstand wird erneut gewürfelt. Hat der Verlierer keinen Joker, geht der Gewinner leer aus.",
-    effect:"dice_duel",
-    count:1
-  },
+    effect:"dice_duel"
+  }
+  ,
   {
     id:"lose_one_point",
     title:"Du verlierst 1 Siegpunkt",
     text:"Dein Team verliert 1 Siegpunkt. Minimum ist 0.",
-    effect:"lose_one_point",
-    count:1
-  },
+    effect:"lose_one_point"
+  }
+  ,
   {
     id:"gain_one_point",
     title:"Du bekommst 1 Siegpunkt",
     text:"Dein Team erhält 1 Siegpunkt.",
-    effect:"gain_one_point",
-    count:5
-  },
+    effect:"gain_one_point"
+  }
+  ,
   {
     id:"gain_two_points",
     title:"Du erhältst 2 Siegpunkte",
     text:"Dein Team erhält 2 Siegpunkte.",
-    effect:"gain_two_points",
-    count:2
-  },
+    effect:"gain_two_points"
+  }
+  ,
   {
     id:"point_transfer_most_to_least",
     title:"Punktetausch",
     text:"Das Team mit den meisten Siegpunkten gibt dem Team mit den wenigsten 1 Siegpunkt. Bei Gleichstand entscheidet ein Glücksrad.",
-    effect:"point_transfer_most_to_least",
-    count:2
-  },
+    effect:"point_transfer_most_to_least"
+  }
+  ,
   {
     id:"back_to_start",
     title:"Zurück zum Start",
     text:"Alle eigenen Figuren müssen zurück auf die Startfelder deines Teams.",
-    effect:"back_to_start",
-    count:1
-  },
+    effect:"back_to_start"
+  }
+  ,
   {
     id:"others_to_start",
     title:"Alle anderen zurück zum Start",
     text:"Alle anderen Spieler müssen komplett zurück auf ihre Startfelder.",
-    effect:"others_to_start",
-    count:1
-  },
+    effect:"others_to_start"
+  }
+  ,
   {
     id:"steal_one_point",
     title:"Klaue 1 Siegpunkt",
     text:"Du klaust 1 Siegpunkt von einem zufälligen Mitspieler.",
-    effect:"steal_one_point",
-    count:1
-  },
+    effect:"steal_one_point"
+  }
+  ,
   {
     id:"sprint_5",
     title:"Laufe 5 Felder",
     text:"Du darfst sofort 1 eigene Figur um 5 Felder bewegen.",
-    effect:"sprint_5",
-    count:5
-  },
+    effect:"sprint_5"
+  }
+  ,
   {
     id:"sprint_10",
     title:"Laufe 10 Felder",
     text:"Du darfst sofort 1 eigene Figur um 10 Felder bewegen.",
-    effect:"sprint_10",
-    count:5
-  },
+    effect:"sprint_10"
+  }
+  ,
   {
     id:"spawn_bonus_light",
     title:"Zusätzliches Lichtfeld",
     text:"Ein zusätzliches Lichtfeld erscheint auf dem Brett. Nach dem Einsammeln verschwindet es wieder.",
-    effect:"spawn_bonus_light",
-    count:5
+    effect:"spawn_bonus_light"
   }
 ];
-
-function getEventCardWeight(card){
-  return Math.max(0, Number(card?.count || 0) || 0);
-}
-
 
 // ---- Event Effect: 3 zusätzliche Barrikaden spawnen ----
 // Darf auf Ereignisfeldern & Siegpunktfeld spawnen.
@@ -5324,26 +5298,7 @@ function pickRandomEventCard(){
     const forced = EVENT_DECK.find(c=>c && c.id===FORCE_EVENT_CARD_ID);
     if(forced) return forced;
   }
-
-  const weighted = [];
-  for(const card of EVENT_DECK){
-    const weight = getEventCardWeight(card);
-    if(weight <= 0) continue;
-    weighted.push({ card, upto: weight });
-  }
-
-  const total = weighted.reduce((sum, entry)=>sum + entry.upto, 0);
-  if(total <= 0){
-    return EVENT_DECK[Math.floor(Math.random()*EVENT_DECK.length)];
-  }
-
-  let roll = Math.floor(Math.random() * total) + 1;
-  for(const entry of weighted){
-    roll -= entry.upto;
-    if(roll <= 0) return entry.card;
-  }
-
-  return weighted[weighted.length - 1].card;
+  return EVENT_DECK[Math.floor(Math.random()*EVENT_DECK.length)];
 }
 
 
@@ -7645,8 +7600,7 @@ function ensureEventSelectUI(){
       seen.add(c.id);
       const o = document.createElement("option");
       o.value = c.id;
-      const weight = getEventCardWeight(c);
-      o.textContent = weight > 0 ? `${c.title} (x${weight})` : `${c.title} (x0)`;
+      o.textContent = c.title;
       sel.appendChild(o);
     }
 
