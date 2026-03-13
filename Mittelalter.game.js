@@ -473,7 +473,14 @@ const online = {
   reconnectTimer: null,
   reconnectAttempt: 0,
   manualClose: false,
-  listenersInstalled: false
+  listenersInstalled: false,
+  heartbeatTimer: null,
+  joinWatchdogTimer: null,
+  staleSocketTimer: null,
+  openWatchdogTimer: null,
+  lastPingAt: 0,
+  lastPongAt: 0,
+  pingMs: null
 };
 
 function qp(name){
@@ -614,6 +621,46 @@ function installOnlineReconnectHooks(){
     }
   });
 }
+function clearOnlineHealthTimers(){
+  if(online.heartbeatTimer){ clearInterval(online.heartbeatTimer); online.heartbeatTimer = null; }
+  if(online.joinWatchdogTimer){ clearTimeout(online.joinWatchdogTimer); online.joinWatchdogTimer = null; }
+  if(online.staleSocketTimer){ clearInterval(online.staleSocketTimer); online.staleSocketTimer = null; }
+  if(online.openWatchdogTimer){ clearTimeout(online.openWatchdogTimer); online.openWatchdogTimer = null; }
+}
+function armJoinWatchdog(){
+  if(online.joinWatchdogTimer) clearTimeout(online.joinWatchdogTimer);
+  online.joinWatchdogTimer = setTimeout(()=>{
+    if(!online.connected || online.joined) return;
+    online.lastError = 'Join hängt';
+    pushOnlineTrace('[WATCHDOG] join timeout');
+    try{ if(online.ws && online.ws.readyState === WebSocket.OPEN){ online.ws.send(JSON.stringify({ type:'sync_request' })); } }catch(_){ }
+    try{ if(online.ws) online.ws.close(4001, 'join-timeout'); }catch(_){ }
+  }, 8000);
+}
+function startOnlineHeartbeat(){
+  clearOnlineHealthTimers();
+  armJoinWatchdog();
+  online.lastPingAt = 0;
+  online.lastPongAt = Date.now();
+  online.pingMs = null;
+  online.heartbeatTimer = setInterval(()=>{
+    if(!online.ws || online.ws.readyState !== WebSocket.OPEN) return;
+    online.lastPingAt = Date.now();
+    try{ online.ws.send(JSON.stringify({ type:'ping', ts: online.lastPingAt })); }catch(_){ }
+  }, 10000);
+  online.staleSocketTimer = setInterval(()=>{
+    if(!online.connected) return;
+    const basis = online.lastPongAt || online.lastIncomingAt || 0;
+    if(!basis) return;
+    const age = Date.now() - basis;
+    if(age > 25000){
+      online.lastError = 'Server antwortet nicht';
+      pushOnlineTrace(`[WATCHDOG] stale socket ${age}ms`);
+      updateOnlineDebugBadge();
+      try{ if(online.ws) online.ws.close(4002, 'stale-socket'); }catch(_){ }
+    }
+  }, 5000);
+}
 function resolveOnlineContext(){
   const boot = (window.MITTELALTER_SESSION && typeof window.MITTELALTER_SESSION === 'object') ? window.MITTELALTER_SESSION : {};
   const roomCode = (qp('roomCode') || qp('room') || qp('code') || boot.roomCode || lsGet(['mittelalter_room_code','mittelalterRoomCode','roomCode']) || '').trim().toUpperCase();
@@ -621,13 +668,13 @@ function resolveOnlineContext(){
   const sessionToken = (qp('sessionToken') || qp('token') || boot.sessionToken || lsGet(['mittelalter_session_token','mittelalterSessionToken','sessionToken','mittelalter_session']) || '').trim();
   const playerName = (qp('name') || boot.playerName || lsGet(['mittelalter_player_name','mittelalterPlayerName','playerName']) || 'Spieler').trim();
   const serverUrlRaw = (qp('serverUrl') || qp('server') || qp('ws') || qp('wss') || boot.serverWs || boot.serverUrl || lsGet(['mittelalter_server_url','mittelalterServerUrl','serverUrl']) || '').trim();
-  if(!roomCode || !playerId || !serverUrlRaw) return null;
+  if(!roomCode || !serverUrlRaw) return null;
   let wsUrl = serverUrlRaw;
   if(/^https?:\/\//i.test(wsUrl)){
     wsUrl = wsUrl.replace(/^http/i, 'ws');
   }
   if(!/^wss?:\/\//i.test(wsUrl)) return null;
-  return { roomCode, playerId, sessionToken, playerName, serverUrl: wsUrl };
+  return { roomCode, playerId, sessionToken, playerName: playerName || 'Spieler', serverUrl: wsUrl };
 }
 function isOnlineAuthorityActive(){
   return !!(online.enabled && online.connected && online.joined);
@@ -679,6 +726,7 @@ function updateOnlineDebugBadge(){
   }else{
     lines.push('Warte auf: –');
   }
+  if(online.pingMs != null) lines.push(`Ping: ${online.pingMs} ms`);
   if(online.lastError) lines.push(`Fehler: ${online.lastError}`);
   const traceLines = Array.isArray(online.traceLines) ? online.traceLines.slice(-4) : [];
   for(const line of traceLines) lines.push(line);
@@ -1078,12 +1126,14 @@ function connectOnlineAuthority(options={}){
   installOnlineReconnectHooks();
   online.enabled = true;
   online.roomCode = ctx.roomCode;
-  online.playerId = ctx.playerId;
+  online.playerId = ctx.playerId || online.playerId || '';
   online.sessionToken = ctx.sessionToken || online.sessionToken || null;
   online.playerName = ctx.playerName;
   online.serverUrl = ctx.serverUrl;
   online.manualClose = false;
   persistOnlineIdentity();
+
+  clearOnlineHealthTimers();
 
   const existing = online.ws;
   if(existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)){
@@ -1093,6 +1143,14 @@ function connectOnlineAuthority(options={}){
 
   try{
     online.ws = new WebSocket(online.serverUrl);
+    online.openWatchdogTimer = setTimeout(()=>{
+      if(online.ws && online.ws.readyState === WebSocket.CONNECTING){
+        online.lastError = 'Socket-Timeout';
+        pushOnlineTrace('[WATCHDOG] socket open timeout');
+        updateOnlineDebugBadge();
+        try{ online.ws.close(); }catch(_){ }
+      }
+    }, 10000);
   }catch(err){
     console.warn('[ONLINE] websocket init failed', err);
     online.lastError = 'Socket-Start fehlgeschlagen';
@@ -1103,20 +1161,25 @@ function connectOnlineAuthority(options={}){
 
   online.ws.addEventListener('open', ()=>{
     clearReconnectTimer();
+    if(online.openWatchdogTimer){ clearTimeout(online.openWatchdogTimer); online.openWatchdogTimer = null; }
     online.connected = true;
     online.joined = false;
     online.reconnectAttempt = 0;
     online.lastError = null;
+    startOnlineHeartbeat();
     updateOnlineDebugBadge();
+    setStatus('Mit Server verbunden – Raumbeitritt läuft...');
     console.info('[ONLINE] connected', online.serverUrl, online.roomCode, online.playerId);
     try{
-      online.ws.send(JSON.stringify({
+      const joinMsg = {
         type: 'join_room',
         roomCode: online.roomCode,
-        playerId: online.playerId,
+        playerId: online.playerId || '',
         sessionToken: online.sessionToken || '',
         name: online.playerName || 'Spieler'
-      }));
+      };
+      pushOnlineTrace(`[SEND] join_room ${joinMsg.roomCode} ${joinMsg.playerId || 'fresh'}`);
+      online.ws.send(JSON.stringify(joinMsg));
     }catch(err){
       console.warn('[ONLINE] join send failed', err);
     }
@@ -1127,6 +1190,13 @@ function connectOnlineAuthority(options={}){
     try{ msg = JSON.parse(ev.data); }catch(err){ console.warn('[ONLINE] message parse failed', err); return; }
     const type = msg?.type;
     if(type === 'hello') return;
+    if(type === 'pong'){
+      online.lastPongAt = Date.now();
+      online.pingMs = online.lastPingAt ? Math.max(0, online.lastPongAt - online.lastPingAt) : null;
+      markOnlineIncoming(type);
+      updateOnlineDebugBadge();
+      return;
+    }
     markOnlineIncoming(type);
     if(type === 'action_ack'){
       online.lastAckAt = Date.now();
@@ -1140,6 +1210,7 @@ function connectOnlineAuthority(options={}){
     }
     if(type === 'room_joined' || type === 'room_created'){
       online.joined = true;
+      if(online.joinWatchdogTimer){ clearTimeout(online.joinWatchdogTimer); online.joinWatchdogTimer = null; }
       online.invalidSessionRecoveryCount = 0;
       online.authoritativeMoveActorId = null;
       applyOnlineSelf(msg.self);
@@ -1154,6 +1225,7 @@ function connectOnlineAuthority(options={}){
     }
     if(type === 'game_started'){
       online.joined = true;
+      if(online.joinWatchdogTimer){ clearTimeout(online.joinWatchdogTimer); online.joinWatchdogTimer = null; }
       online.invalidSessionRecoveryCount = 0;
       online.authoritativeMoveActorId = null;
       applyOnlineSelf(msg.self);
@@ -1268,6 +1340,7 @@ function connectOnlineAuthority(options={}){
   });
 
   online.ws.addEventListener('close', ()=>{
+    clearOnlineHealthTimers();
     online.connected = false;
     online.joined = false;
     online.reconnectAttempt += 1;
@@ -7937,7 +8010,13 @@ function ensureEventSelectUI(){
   hostParent.appendChild(box);
   return box;
 }
-connectOnlineAuthority();
+const __onlineCtx = resolveOnlineContext();
+if(!__onlineCtx){
+  console.warn('[ONLINE] no multiplayer context found -> local mode');
+  setStatus('Kein Multiplayer-Kontext gefunden – lokaler Modus. Öffne das Spiel über die Lobby.');
+}else{
+  connectOnlineAuthority();
+}
 load();
 draw();
 
