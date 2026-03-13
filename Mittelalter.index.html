@@ -8,9 +8,9 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=EB+Garamond:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="Mittelalter.style.css?v=20260301-005031" />
-<script>
-  window.BUILD_ID = "20260301-005031";
-</script>
+  <script>
+    window.BUILD_ID = "20260301-005031";
+  </script>
 </head>
 <body>
   <header class="topbar">
@@ -79,7 +79,6 @@
         <div class="small" id="jokerHint">–</div>
       </div>
 
-
       <div class="card" id="bossCard">
         <div class="cardTitle">Boss</div>
         <div class="bossWrap" id="bossWrap">
@@ -99,11 +98,11 @@
     </aside>
   </main>
 
-
   <div id="onlineBadge" style="position:fixed;left:12px;bottom:12px;z-index:9999;background:rgba(14,22,38,.92);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.35);font:14px/1.35 Arial,Helvetica,sans-serif;backdrop-filter:blur(6px);max-width:280px">
     <div style="font-weight:700;margin-bottom:4px">Lobby-Info</div>
     <div id="onlineBadgeText">Prüfe Lobby-Daten…</div>
   </div>
+
   <script>
 (function () {
   const SERVER_HTTP = 'https://mittelalter-server.onrender.com';
@@ -132,10 +131,6 @@
     }
   }
 
-  function makePlayerId() {
-    return 'p_' + Math.random().toString(36).slice(2, 10);
-  }
-
   function readLobbySession() {
     const packedSession = readPacked(sessionStorage, 'mittelalterLobby');
     const packedLocal = readPacked(localStorage, 'mittelalterLobby');
@@ -151,7 +146,7 @@
       packedLocal.playerName ||
       '';
 
-    let playerId =
+    const playerId =
       safeGet(sessionStorage, 'playerId') ||
       safeGet(localStorage, 'playerId') ||
       safeGet(sessionStorage, 'mittelalter_player_id') ||
@@ -188,8 +183,6 @@
       packedLocal.lastMode ||
       'online';
 
-    if (!playerId && roomCode) playerId = makePlayerId();
-
     return {
       playerName: String(playerName || '').trim(),
       playerId: String(playerId || '').trim(),
@@ -216,6 +209,7 @@
   safeSet(sessionStorage, 'mittelalterServerHttp', SERVER_HTTP);
   safeSet(sessionStorage, 'mittelalterServerWs', SERVER_WS);
   safeSet(sessionStorage, 'mittelalter_server_url', SERVER_WS);
+  safeSet(sessionStorage, 'mittelalter_room_code', session.roomCode || '');
 
   safeSet(localStorage, 'playerName', session.playerName || '');
   safeSet(localStorage, 'roomCode', session.roomCode || '');
@@ -228,6 +222,7 @@
   safeSet(localStorage, 'mittelalterServerHttp', SERVER_HTTP);
   safeSet(localStorage, 'mittelalterServerWs', SERVER_WS);
   safeSet(localStorage, 'mittelalter_server_url', SERVER_WS);
+  safeSet(localStorage, 'mittelalter_room_code', session.roomCode || '');
 
   const packed = {
     playerName: session.playerName,
@@ -259,13 +254,13 @@
       'Spieler: <b>' + session.playerName + '</b><br>' +
       'Raum: <b>' + session.roomCode + '</b><br>' +
       'ID: <b>' + (session.playerId || '–') + '</b><br>' +
-      'Token: <b>' + (session.sessionToken ? 'vorhanden' : 'neu / leer') + '</b><br>' +
+      'Token: <b>' + (session.sessionToken ? 'vorhanden' : 'leer / neu') + '</b><br>' +
       'Rolle: <b>' + (session.isHost ? 'Host' : 'Mitspieler') + '</b><br>' +
       'Modus: <b>' + (session.lastMode === 'online' ? 'Online' : 'Offline-Test') + '</b>';
   }
 })();
-  </script></script>
+  </script>
 
-  <script src="Mittelalter.game.js?v=290"></script>
+  <script src="Mittelalter.game-21-ultra-reconnect.js?v=291"></script>
 </body>
 </html>
