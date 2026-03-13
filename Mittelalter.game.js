@@ -697,23 +697,18 @@ function requestServerRoll(reason='main'){
   });
 }
 function broadcastTurnStateOnline(infoText){
+  // Stability Patch v5b:
+  // Der Server ist Chef für Turn-Ende / Boss-Phase / Snapshot-Fortschritt.
+  // finish_move und turn_update waren nur Soft-Sync-Pfade und dürfen online
+  // keine Spiellogik mehr antreiben. Wir behalten die Funktion als zentrale
+  // Stelle für lokale UI-Hinweise/Tracing, senden aber absichtlich KEINE
+  // zusätzlichen Abschluss-Pakete mehr an den Server.
   if(!isOnlineAuthorityActive()) return;
   if(online.suppressTurnBroadcast) return;
 
-  const payload = {
-    turnIndex: Number(state.turn || 0),
-    phase: String(state.phase || 'needRoll'),
-    info: infoText || null
-  };
-
-  if(online.authoritativeMoveActorId){
-    if(online.playerId !== online.authoritativeMoveActorId) return;
-    payload.stateSnapshot = buildFullSyncSnapshot();
-    sendServerAction('finish_move', payload);
-    return;
-  }
-
-  sendServerAction('turn_update', payload);
+  const phase = String(state.phase || 'needRoll');
+  const turnIndex = Number(state.turn || 0);
+  pushOnlineTrace(`[TURN_UI] phase=${phase} turn=${turnIndex}${infoText ? ` | ${String(infoText)}` : ''}`);
 }
 
 function buildFullSyncSnapshot(){
@@ -908,6 +903,10 @@ function applyAuthoritativeMove(moveMsg, snapshot){
 
   if(snap){
     applyServerSnapshot(snap, { silentDraw:true });
+    const serverPhase = String(snap.phase || 'resolveMove');
+    if(serverPhase === 'needRoll' || serverPhase === 'placeBarricade' || serverPhase === 'gameOver'){
+      online.authoritativeMoveActorId = null;
+    }
     state.selected = null;
     state.highlighted.clear();
     state.placeHighlighted.clear();
@@ -982,11 +981,12 @@ function connectOnlineAuthority(){
     }
     if(type === 'room_joined' || type === 'room_created'){
       online.joined = true;
+      online.authoritativeMoveActorId = null;
       if(msg.self?.playerId) online.playerId = msg.self.playerId;
       if(msg.room) applyServerRoomState(msg.room, { forceNeedRoll:false, silentDraw:false });
-      if(sendServerAction('turn_update', { turnIndex:Number(state.turn||0), phase:String(state.phase||'needRoll') })){
-        // only as soft sync for reconnect; server validates later on real actions
-      }
+      // Stability Patch v5b:
+      // Kein turn_update mehr direkt nach Join/Reconnect senden.
+      // Der Server liefert den autoritativen Zustand über room_state/sync_request.
       try{ online.ws.send(JSON.stringify({ type:'sync_request' })); }catch(_){ }
       return;
     }
