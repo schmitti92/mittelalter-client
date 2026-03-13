@@ -7827,6 +7827,23 @@ async function load(){
     console.warn("[AUTO-FIX] Boss-Spawn verbunden:", s.id, "->", best.id);
   }
 
+  const serverRoomAtLoad = online && online.room && online.room.gameState ? online.room : null;
+  const serverSnapshotAtLoad = serverRoomAtLoad?.gameState?.snapshot || null;
+
+  if(serverSnapshotAtLoad){
+    console.info('[LOAD] authoritative snapshot detected after board load – preserving server state');
+    state.bossSpawnNodes = getBossSpawnNodes();
+    if(selPlayerCount) selPlayerCount.value = String((serverRoomAtLoad?.playerCount || state.players.length || 4));
+    fitToBoard(60);
+    applyServerRoomState(serverRoomAtLoad, { forceNeedRoll:false, silentDraw:true });
+    ensureJokerState();
+    renderJokerButtons();
+    updateJokerUI();
+    ensureEventSelectUI();
+    draw();
+    return;
+  }
+
   initPieces();
   initEventFieldsFromBoard();
 
