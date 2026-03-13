@@ -508,6 +508,50 @@ function clearOnlineIdentity(){
   for(const key of ['mittelalter_room_code','mittelalter_player_id','mittelalter_session_token','mittelalter_player_name','mittelalter_server_url']){
     lsSet(key, null);
   }
+  for(const key of ['roomCode','playerId','playerName','mittelalter_session']){
+    lsSet(key, null);
+  }
+}
+function makeFreshOnlinePlayerId(){
+  return 'p_' + Math.random().toString(36).slice(2, 10);
+}
+function redirectToLobbyWithContext(reason='reconnect_failed'){
+  try{
+    const params = new URLSearchParams();
+    if(online.roomCode) params.set('room', String(online.roomCode).trim().toUpperCase());
+    if(online.playerName) params.set('player', String(online.playerName).trim());
+    params.set('reason', String(reason || 'reconnect_failed'));
+    location.href = 'Mittelalter.lobby.html' + (params.toString() ? ('?' + params.toString()) : '');
+  }catch(_){
+    location.href = 'Mittelalter.lobby.html';
+  }
+}
+function beginCrashSafeRecovery(kind='retry'){
+  clearReconnectTimer();
+  clearPendingRequest('Crash-Safe Recovery');
+  online.manualClose = true;
+  try{ if(online.ws) online.ws.close(1000, 'crash-safe-recovery'); }catch(_){ }
+  online.connected = false;
+  online.joined = false;
+  online.lastError = null;
+
+  if(kind === 'fresh-lobby-rejoin'){
+    const freshId = makeFreshOnlinePlayerId();
+    online.playerId = freshId;
+    online.sessionToken = '';
+    persistOnlineIdentity({ playerId: freshId, sessionToken: '' });
+    lsSet('playerId', freshId);
+    lsSet('mittelalter_player_id', freshId);
+    setStatus('Alte Sitzung war ungültig. Neuer Beitritt zur Lobby wird versucht...');
+    pushOnlineTrace('[RECOVERY] frischer Lobby-Beitritt');
+    online.manualClose = false;
+    scheduleOnlineReconnect('fresh-lobby-rejoin');
+    return;
+  }
+
+  setStatus('Raum/Sitzung nicht mehr gültig. Zurück zur Lobby...');
+  pushOnlineTrace('[RECOVERY] zurück zur Lobby');
+  setTimeout(()=>redirectToLobbyWithContext(kind), 900);
 }
 function applyOnlineSelf(self){
   if(!self || typeof self !== 'object') return;
@@ -515,6 +559,9 @@ function applyOnlineSelf(self){
   if(typeof self.sessionToken === 'string') online.sessionToken = String(self.sessionToken || '');
   if(self.name) online.playerName = String(self.name || 'Spieler');
   persistOnlineIdentity();
+  lsSet('playerId', online.playerId || '');
+  lsSet('playerName', online.playerName || '');
+  lsSet('mittelalter_session', online.sessionToken || '');
 }
 function clearReconnectTimer(){
   if(online.reconnectTimer){
@@ -1152,16 +1199,45 @@ function connectOnlineAuthority(options={}){
       return;
     }
     if(type === 'error_message'){
-      clearPendingRequest(String(msg.message || 'Serverfehler'));
-      console.warn('[ONLINE] server error', msg.message);
-      pushOnlineTrace(`[ERR] ${msg.message || 'server error'}`);
-      online.lastError = String(msg.message || 'Serverfehler');
-      if(msg.message) setStatus(String(msg.message));
-      if(/Reconnect abgelehnt|Session ungültig|Spiel läuft bereits\. Reconnect nur/i.test(String(msg.message || ''))){
+      const msgText = String(msg.message || 'Serverfehler');
+      clearPendingRequest(msgText);
+      console.warn('[ONLINE] server error', msgText);
+      pushOnlineTrace(`[ERR] ${msgText}`);
+      online.lastError = msgText;
+      setStatus(msgText);
+
+      if(/Raum nicht gefunden/i.test(msgText)){
         clearOnlineIdentity();
         online.playerId = null;
         online.sessionToken = null;
+        updateOnlineDebugBadge();
+        beginCrashSafeRecovery('room_missing');
+        return;
       }
+
+      if(/Reconnect abgelehnt|Session ungültig/i.test(msgText)){
+        const inWaitingRoom = !!online.room && online.room.status === 'waiting';
+        clearOnlineIdentity();
+        online.sessionToken = null;
+        if(inWaitingRoom){
+          beginCrashSafeRecovery('fresh-lobby-rejoin');
+        }else{
+          online.playerId = null;
+          updateOnlineDebugBadge();
+          beginCrashSafeRecovery('invalid_session');
+        }
+        return;
+      }
+
+      if(/Spiel läuft bereits\. Reconnect nur/i.test(msgText)){
+        clearOnlineIdentity();
+        online.playerId = null;
+        online.sessionToken = null;
+        updateOnlineDebugBadge();
+        beginCrashSafeRecovery('running_game_requires_reconnect');
+        return;
+      }
+
       updateOnlineDebugBadge();
       return;
     }
@@ -1174,7 +1250,9 @@ function connectOnlineAuthority(options={}){
     clearPendingRequest('Socket getrennt');
     console.warn('[ONLINE] disconnected');
     updateOnlineDebugBadge();
-    scheduleOnlineReconnect('socket-close');
+    if(online.roomCode && online.serverUrl && (online.playerId || (online.room && online.room.status === 'waiting'))){
+      scheduleOnlineReconnect('socket-close');
+    }
   });
   online.ws.addEventListener('error', (err)=>{
     online.lastError = 'Socket-Fehler';
