@@ -507,6 +507,28 @@ function lsSet(key, value){
     }catch(_){ }
   }
 }
+
+function updateBootSession(overrides={}){
+  try{
+    const boot = (window.MITTELALTER_SESSION && typeof window.MITTELALTER_SESSION === 'object') ? window.MITTELALTER_SESSION : {};
+    const merged = Object.assign({}, boot, overrides || {});
+    if(!('playerName' in merged) || !String(merged.playerName || '').trim()) merged.playerName = online.playerName || 'Spieler';
+    if(!('roomCode' in merged) || !String(merged.roomCode || '').trim()) merged.roomCode = online.roomCode || '';
+    if(!('serverWs' in merged) || !String(merged.serverWs || '').trim()) merged.serverWs = online.serverUrl || boot.serverWs || '';
+    window.MITTELALTER_SESSION = merged;
+  }catch(_){ }
+}
+function clearOnlineIdentityKeepRoomAndName(){
+  online.playerId = '';
+  online.sessionToken = '';
+  online.forceFreshJoin = true;
+  persistOnlineIdentity({ playerId:'', sessionToken:'' });
+  lsSet('playerId', '');
+  lsSet('mittelalter_player_id', '');
+  lsSet('mittelalter_session', '');
+  lsSet('mittelalter_session_token', '');
+  updateBootSession({ playerId:'', sessionToken:'' });
+}
 function persistOnlineIdentity(overrides={}){
   const roomCode = (overrides.roomCode ?? online.roomCode ?? '').toString().trim().toUpperCase();
   const playerId = (overrides.playerId ?? online.playerId ?? '').toString().trim();
@@ -620,16 +642,9 @@ function beginCrashSafeRecovery(kind='retry'){
   if(kind === 'fresh-lobby-rejoin'){
     hideOnlineRecoveryPanel();
     online.invalidSessionRecoveryCount = Number(online.invalidSessionRecoveryCount || 0) + 1;
-    const freshId = makeFreshOnlinePlayerId();
-    online.playerId = freshId;
-    online.sessionToken = '';
-    persistOnlineIdentity({ playerId: freshId, sessionToken: '' });
-    lsSet('playerId', freshId);
-    lsSet('mittelalter_player_id', freshId);
-    lsSet('mittelalter_session', '');
-    lsSet('mittelalter_session_token', '');
-    setStatus('Alte Sitzung war ungültig. Neuer Beitritt wird versucht...');
-    pushOnlineTrace('[RECOVERY] frischer Beitritt mit neuer Sitzung');
+    clearOnlineIdentityKeepRoomAndName();
+    setStatus('Alte Sitzung war ungültig. Frischer Beitritt ohne alte Spieler-ID wird versucht...');
+    pushOnlineTrace('[RECOVERY] frischer Beitritt ohne alte Spieler-ID');
     online.manualClose = false;
     scheduleOnlineReconnect('fresh-lobby-rejoin');
     return;
@@ -648,13 +663,15 @@ function beginCrashSafeRecovery(kind='retry'){
 }
 function applyOnlineSelf(self){
   if(!self || typeof self !== 'object') return;
-  if(self.playerId) online.playerId = String(self.playerId);
+  if(self.playerId != null) online.playerId = String(self.playerId || '');
   if(typeof self.sessionToken === 'string') online.sessionToken = String(self.sessionToken || '');
   if(self.name) online.playerName = String(self.name || 'Spieler');
+  online.forceFreshJoin = false;
   persistOnlineIdentity();
   lsSet('playerId', online.playerId || '');
   lsSet('playerName', online.playerName || '');
   lsSet('mittelalter_session', online.sessionToken || '');
+  updateBootSession({ playerId: online.playerId || '', sessionToken: online.sessionToken || '', playerName: online.playerName || 'Spieler', roomCode: online.roomCode || '' });
 }
 function clearReconnectTimer(){
   if(online.reconnectTimer){
@@ -736,11 +753,11 @@ function startOnlineHeartbeat(){
 }
 function resolveOnlineContext(){
   const boot = (window.MITTELALTER_SESSION && typeof window.MITTELALTER_SESSION === 'object') ? window.MITTELALTER_SESSION : {};
-  const roomCode = (qp('roomCode') || qp('room') || qp('code') || boot.roomCode || lsGet(['mittelalter_room_code','mittelalterRoomCode','roomCode']) || '').trim().toUpperCase();
-  const playerId = (qp('playerId') || qp('pid') || boot.playerId || lsGet(['mittelalter_player_id','mittelalterPlayerId','playerId']) || '').trim();
-  const sessionToken = (qp('sessionToken') || qp('token') || boot.sessionToken || lsGet(['mittelalter_session_token','mittelalterSessionToken','sessionToken','mittelalter_session']) || '').trim();
-  const playerName = (qp('name') || boot.playerName || lsGet(['mittelalter_player_name','mittelalterPlayerName','playerName']) || 'Spieler').trim();
-  const serverUrlRaw = (qp('serverUrl') || qp('server') || qp('ws') || qp('wss') || boot.serverWs || boot.serverUrl || lsGet(['mittelalter_server_url','mittelalterServerUrl','serverUrl']) || '').trim();
+  const roomCode = (qp('roomCode') || qp('room') || qp('code') || online.roomCode || lsGet(['mittelalter_room_code','mittelalterRoomCode','roomCode']) || boot.roomCode || '').trim().toUpperCase();
+  const playerId = (online.forceFreshJoin ? '' : (online.playerId || lsGet(['mittelalter_player_id','mittelalterPlayerId','playerId']) || boot.playerId || qp('playerId') || qp('pid') || '')).trim();
+  const sessionToken = (online.forceFreshJoin ? '' : (online.sessionToken || lsGet(['mittelalter_session_token','mittelalterSessionToken','sessionToken','mittelalter_session']) || boot.sessionToken || qp('sessionToken') || qp('token') || '')).trim();
+  const playerName = (online.playerName || qp('name') || lsGet(['mittelalter_player_name','mittelalterPlayerName','playerName']) || boot.playerName || 'Spieler').trim();
+  const serverUrlRaw = (online.serverUrl || qp('serverUrl') || qp('server') || qp('ws') || qp('wss') || lsGet(['mittelalter_server_url','mittelalterServerUrl','serverUrl']) || boot.serverWs || boot.serverUrl || '').trim();
   if(!roomCode || !serverUrlRaw) return null;
   let wsUrl = serverUrlRaw;
   if(/^https?:\/\//i.test(wsUrl)){
@@ -1199,8 +1216,8 @@ function connectOnlineAuthority(options={}){
   installOnlineReconnectHooks();
   online.enabled = true;
   online.roomCode = ctx.roomCode;
-  online.playerId = ctx.playerId || online.playerId || '';
-  online.sessionToken = ctx.sessionToken || online.sessionToken || null;
+  online.playerId = ctx.playerId || '';
+  online.sessionToken = ctx.sessionToken || '';
   online.playerName = ctx.playerName;
   online.serverUrl = ctx.serverUrl;
   online.manualClose = false;
@@ -1388,14 +1405,11 @@ function connectOnlineAuthority(options={}){
       if(/Reconnect abgelehnt|Session ungültig/i.test(msgText)){
         const inWaitingRoom = !!online.room && online.room.status === 'waiting';
         const mayRetryFresh = inWaitingRoom || !online.joined;
-        online.sessionToken = null;
-        persistOnlineIdentity({ playerId: online.playerId || '', sessionToken: '' });
-        if(mayRetryFresh && Number(online.invalidSessionRecoveryCount || 0) < 1){
+        clearOnlineIdentityKeepRoomAndName();
+        updateOnlineDebugBadge();
+        if(mayRetryFresh && Number(online.invalidSessionRecoveryCount || 0) < 2){
           beginCrashSafeRecovery('fresh-lobby-rejoin');
         }else{
-          online.playerId = null;
-          persistOnlineIdentity({ playerId:'', sessionToken:'' });
-          updateOnlineDebugBadge();
           beginCrashSafeRecovery('invalid_session');
         }
         return;
