@@ -18,6 +18,8 @@ const btnRoll = document.getElementById("btnRoll");
 const btnFit = document.getElementById("btnFit");
 const dieBox = document.getElementById("dieBox");
 const statusLine = document.getElementById("statusLine");
+const curPlayerEl = document.getElementById("curPlayer");
+const curPhaseEl = document.getElementById("curPhase");
 
 // Joker UI (Sidebar)
 const jokerButtonsWrap = document.getElementById("jokerButtons");
@@ -749,27 +751,33 @@ function applyServerRoomState(room, opts={}){
 
   const turnIndex = Math.max(0, Math.min(playerCount - 1, Number(room.gameState?.turnIndex || 0)));
   state.turn = turnIndex;
-  updateTurnBadge();
 
-  if(opts.forceNeedRoll || room.gameState?.phase === 'needRoll'){
-    if(state.phase === 'loading' || state.phase === 'needRoll' || opts.forceNeedRoll){
-      state.roll = null;
-      state.selected = null;
-      state.highlighted.clear();
-      state.placeHighlighted.clear();
-      ensurePortalState();
-      state.portalHighlighted.clear();
-      state.phase = 'needRoll';
-      dieBox.textContent = '–';
-    }
+  const roomPhase = String(room.gameState?.phase || room.gameState?.snapshot?.phase || state.phase || 'needRoll');
+  if(opts.forceNeedRoll || roomPhase === 'needRoll'){
+    state.roll = null;
+    state.selected = null;
+    state.highlighted.clear();
+    state.placeHighlighted.clear();
+    ensurePortalState();
+    state.portalHighlighted.clear();
+    state.phase = 'needRoll';
+    dieBox.textContent = '–';
+  } else if(!room.gameState?.snapshot){
+    state.phase = roomPhase;
   }
 
   const snap = room.gameState?.snapshot || null;
   if(snap) applyServerSnapshot(snap, { silentDraw:true });
 
-  if(!isLocalPlayersTurn()){
-    setStatus(`Team ${currentTeam()} ist dran – Wurf wird vom Server gesteuert.`);
+  if(state.phase === 'needRoll'){
+    if(isLocalPlayersTurn()) setStatus(`Team ${currentTeam()} ist dran – du kannst jetzt würfeln.`);
+    else setStatus(`Team ${currentTeam()} ist dran – Wurf wird vom Server gesteuert.`);
+  } else {
+    updateTurnSystemUI();
   }
+
+  updateTurnBadge();
+  updateTurnSystemUI();
 
   if(!opts.silentDraw){
     draw();
@@ -797,6 +805,7 @@ function applyAuthoritativeRoll(roll){
     setStatus(`${actor} würfelt ${roll.value}${parts}. Alle Spieler sehen den Wurf.`);
   }
   updateTurnBadge();
+  updateTurnSystemUI();
   updateJokerUI();
   ensureEventSelectUI();
 }
@@ -1433,6 +1442,55 @@ function setStatus(t){
   if(_statusTextEl) _statusTextEl.textContent = t;
   else if(statusLine) statusLine.textContent = t;
   updateTurnBadge();
+  updateTurnSystemUI();
+}
+
+
+function getCurrentTurnPlayerLabel(){
+  if(online.room && Array.isArray(online.room.players) && online.room.players.length){
+    const idx = Math.max(0, Math.min(online.room.players.length - 1, Number(state.turn || 0)));
+    const p = online.room.players[idx] || null;
+    if(p && p.name) return String(p.name);
+  }
+  return `Team ${currentTeam()}`;
+}
+
+function getPhaseLabel(phase){
+  switch(String(phase || '')){
+    case 'loading': return 'Lädt';
+    case 'lobby': return 'Lobby';
+    case 'needRoll': return 'Würfeln';
+    case 'choosePiece': return 'Figur wählen';
+    case 'chooseTarget': return 'Zielfeld wählen';
+    case 'placeBarricade': return 'Barrikade platzieren';
+    case 'usePortal': return 'Portal';
+    case 'bossPhase': return 'Bossphase';
+    case 'resolveMove': return 'Zug wird geprüft';
+    case 'gameOver': return 'Spiel beendet';
+    default: return phase ? String(phase) : '–';
+  }
+}
+
+function updateTurnSystemUI(){
+  const playerLabel = getCurrentTurnPlayerLabel();
+  const phaseLabel = getPhaseLabel(state.phase);
+
+  if(curPlayerEl) curPlayerEl.textContent = playerLabel || '–';
+  if(curPhaseEl) curPhaseEl.textContent = phaseLabel || '–';
+
+  if(btnRoll){
+    const canRollLocal = !state.gameOver && state.phase === 'needRoll' && (!isOnlineAuthorityActive() || isLocalPlayersTurn());
+    btnRoll.disabled = !canRollLocal;
+    btnRoll.style.opacity = canRollLocal ? '1' : '.55';
+    btnRoll.style.cursor = canRollLocal ? 'pointer' : 'not-allowed';
+    btnRoll.title = canRollLocal
+      ? 'Jetzt würfeln'
+      : (state.gameOver
+          ? 'Spiel beendet'
+          : (state.phase !== 'needRoll'
+              ? `Aktuelle Phase: ${phaseLabel}`
+              : 'Der andere Spieler ist am Zug'));
+  }
 }
 
 
@@ -7328,6 +7386,7 @@ function roundRect(ctx, x, y, w, h, r){
 
 // ---------- Render -----------
 function draw(){
+  updateTurnSystemUI();
   // Canvas auf CSS-Größe setzen (einfach)
   const dpr = Math.max(1, window.devicePixelRatio||1);
   const w = Math.floor(canvas.clientWidth * dpr);
