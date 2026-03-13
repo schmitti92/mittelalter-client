@@ -448,9 +448,9 @@ const online = {
   enabled: false,
   roomCode: null,
   playerId: null,
+  sessionToken: null,
   playerName: null,
   serverUrl: null,
-  sessionToken: null,
   ws: null,
   connected: false,
   joined: false,
@@ -467,7 +467,11 @@ const online = {
   lastAckAt: 0,
   lastIncomingAt: 0,
   lastError: null,
-  debugBadgeEl: null
+  debugBadgeEl: null,
+  reconnectTimer: null,
+  reconnectAttempt: 0,
+  manualClose: false,
+  listenersInstalled: false
 };
 
 function qp(name){
@@ -482,10 +486,78 @@ function lsGet(keys){
   }
   return null;
 }
+function lsSet(key, value){
+  try{
+    if(value == null || value === '') localStorage.removeItem(key);
+    else localStorage.setItem(key, String(value));
+  }catch(_){ }
+}
+function persistOnlineIdentity(overrides={}){
+  const roomCode = (overrides.roomCode ?? online.roomCode ?? '').toString().trim().toUpperCase();
+  const playerId = (overrides.playerId ?? online.playerId ?? '').toString().trim();
+  const sessionToken = (overrides.sessionToken ?? online.sessionToken ?? '').toString().trim();
+  const playerName = (overrides.playerName ?? online.playerName ?? 'Spieler').toString().trim() || 'Spieler';
+  const serverUrl = (overrides.serverUrl ?? online.serverUrl ?? '').toString().trim();
+  lsSet('mittelalter_room_code', roomCode);
+  lsSet('mittelalter_player_id', playerId);
+  lsSet('mittelalter_session_token', sessionToken);
+  lsSet('mittelalter_player_name', playerName);
+  lsSet('mittelalter_server_url', serverUrl);
+}
+function clearOnlineIdentity(){
+  for(const key of ['mittelalter_room_code','mittelalter_player_id','mittelalter_session_token','mittelalter_player_name','mittelalter_server_url']){
+    lsSet(key, null);
+  }
+}
+function applyOnlineSelf(self){
+  if(!self || typeof self !== 'object') return;
+  if(self.playerId) online.playerId = String(self.playerId);
+  if(typeof self.sessionToken === 'string') online.sessionToken = String(self.sessionToken || '');
+  if(self.name) online.playerName = String(self.name || 'Spieler');
+  persistOnlineIdentity();
+}
+function clearReconnectTimer(){
+  if(online.reconnectTimer){
+    clearTimeout(online.reconnectTimer);
+    online.reconnectTimer = null;
+  }
+}
+function scheduleOnlineReconnect(reason='retry'){
+  if(!online.enabled || online.manualClose) return;
+  if(!online.roomCode || !online.serverUrl) return;
+  clearReconnectTimer();
+  const delay = Math.min(6000, 800 + (online.reconnectAttempt * 700));
+  online.reconnectTimer = setTimeout(()=>{
+    online.reconnectTimer = null;
+    connectOnlineAuthority({ force:true, reason });
+  }, delay);
+  pushOnlineTrace(`[RECONNECT] geplant in ${delay}ms (${reason})`);
+}
+function installOnlineReconnectHooks(){
+  if(online.listenersInstalled) return;
+  online.listenersInstalled = true;
+  window.addEventListener('online', ()=>{
+    if(!online.connected) scheduleOnlineReconnect('browser-online');
+  });
+  window.addEventListener('focus', ()=>{
+    if(!online.connected) scheduleOnlineReconnect('window-focus');
+    else if(online.ws && online.ws.readyState === WebSocket.OPEN){
+      try{ online.ws.send(JSON.stringify({ type:'sync_request' })); }catch(_){ }
+    }
+  });
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState === 'visible'){
+      if(!online.connected) scheduleOnlineReconnect('visible');
+      else if(online.ws && online.ws.readyState === WebSocket.OPEN){
+        try{ online.ws.send(JSON.stringify({ type:'sync_request' })); }catch(_){ }
+      }
+    }
+  });
+}
 function resolveOnlineContext(){
   const roomCode = (qp('roomCode') || qp('room') || qp('code') || lsGet(['mittelalter_room_code','mittelalterRoomCode','roomCode']) || '').trim().toUpperCase();
   const playerId = (qp('playerId') || qp('pid') || lsGet(['mittelalter_player_id','mittelalterPlayerId','playerId']) || '').trim();
-  const sessionToken = (qp('sessionToken') || qp('session') || qp('token') || lsGet(['mittelalter_session_token','mittelalterSessionToken','sessionToken']) || '').trim();
+  const sessionToken = (qp('sessionToken') || qp('token') || lsGet(['mittelalter_session_token','mittelalterSessionToken','sessionToken']) || '').trim();
   const playerName = (qp('name') || lsGet(['mittelalter_player_name','mittelalterPlayerName','playerName']) || 'Spieler').trim();
   const serverUrlRaw = (qp('serverUrl') || qp('server') || qp('ws') || qp('wss') || lsGet(['mittelalter_server_url','mittelalterServerUrl','serverUrl']) || '').trim();
   if(!roomCode || !playerId || !serverUrlRaw) return null;
@@ -495,43 +567,6 @@ function resolveOnlineContext(){
   }
   if(!/^wss?:\/\//i.test(wsUrl)) return null;
   return { roomCode, playerId, sessionToken, playerName, serverUrl: wsUrl };
-}
-
-function persistOnlineIdentity(self=null, room=null){
-  try{
-    const roomCode = String(room?.roomCode || online.roomCode || '').trim().toUpperCase();
-    const playerId = String(self?.playerId || online.playerId || '').trim();
-    const sessionToken = String(self?.sessionToken || online.sessionToken || '').trim();
-    const playerName = String(self?.name || online.playerName || '').trim();
-    const serverUrl = String(online.serverUrl || '').trim();
-    if(roomCode) localStorage.setItem('mittelalter_room_code', roomCode);
-    if(playerId) localStorage.setItem('mittelalter_player_id', playerId);
-    if(sessionToken) localStorage.setItem('mittelalter_session_token', sessionToken);
-    if(playerName) localStorage.setItem('mittelalter_player_name', playerName);
-    if(serverUrl) localStorage.setItem('mittelalter_server_url', serverUrl);
-  }catch(_){ }
-}
-
-function clearOnlineIdentity(){
-  const keys = [
-    'mittelalter_room_code','mittelalterRoomCode','roomCode',
-    'mittelalter_player_id','mittelalterPlayerId','playerId',
-    'mittelalter_session_token','mittelalterSessionToken','sessionToken',
-    'mittelalter_player_name','mittelalterPlayerName','playerName',
-    'mittelalter_server_url','mittelalterServerUrl','serverUrl'
-  ];
-  for(const k of keys){
-    try{ localStorage.removeItem(k); }catch(_){ }
-  }
-}
-
-function applyOnlineSelf(self, room=null){
-  if(!self || typeof self !== 'object') return;
-  if(self.playerId) online.playerId = String(self.playerId);
-  if(self.sessionToken) online.sessionToken = String(self.sessionToken);
-  if(self.name) online.playerName = String(self.name);
-  if(room?.roomCode) online.roomCode = String(room.roomCode).toUpperCase();
-  persistOnlineIdentity(self, room);
 }
 function isOnlineAuthorityActive(){
   return !!(online.enabled && online.connected && online.joined);
@@ -736,23 +771,18 @@ function requestServerRoll(reason='main'){
   });
 }
 function broadcastTurnStateOnline(infoText){
+  // Stability Patch v5b:
+  // Der Server ist Chef für Turn-Ende / Boss-Phase / Snapshot-Fortschritt.
+  // finish_move und turn_update waren nur Soft-Sync-Pfade und dürfen online
+  // keine Spiellogik mehr antreiben. Wir behalten die Funktion als zentrale
+  // Stelle für lokale UI-Hinweise/Tracing, senden aber absichtlich KEINE
+  // zusätzlichen Abschluss-Pakete mehr an den Server.
   if(!isOnlineAuthorityActive()) return;
   if(online.suppressTurnBroadcast) return;
 
-  const payload = {
-    turnIndex: Number(state.turn || 0),
-    phase: String(state.phase || 'needRoll'),
-    info: infoText || null
-  };
-
-  if(online.authoritativeMoveActorId){
-    if(online.playerId !== online.authoritativeMoveActorId) return;
-    payload.stateSnapshot = buildFullSyncSnapshot();
-    sendServerAction('finish_move', payload);
-    return;
-  }
-
-  sendServerAction('turn_update', payload);
+  const phase = String(state.phase || 'needRoll');
+  const turnIndex = Number(state.turn || 0);
+  pushOnlineTrace(`[TURN_UI] phase=${phase} turn=${turnIndex}${infoText ? ` | ${String(infoText)}` : ''}`);
 }
 
 function buildFullSyncSnapshot(){
@@ -947,6 +977,10 @@ function applyAuthoritativeMove(moveMsg, snapshot){
 
   if(snap){
     applyServerSnapshot(snap, { silentDraw:true });
+    const serverPhase = String(snap.phase || 'resolveMove');
+    if(serverPhase === 'needRoll' || serverPhase === 'placeBarricade' || serverPhase === 'gameOver'){
+      online.authoritativeMoveActorId = null;
+    }
     state.selected = null;
     state.highlighted.clear();
     state.placeHighlighted.clear();
@@ -970,25 +1004,40 @@ function applyAuthoritativeMove(moveMsg, snapshot){
   }catch(_){ }
   return false;
 }
-function connectOnlineAuthority(){
+function connectOnlineAuthority(options={}){
   const ctx = resolveOnlineContext();
   if(!ctx) return;
+  installOnlineReconnectHooks();
   online.enabled = true;
   online.roomCode = ctx.roomCode;
   online.playerId = ctx.playerId;
+  online.sessionToken = ctx.sessionToken || online.sessionToken || null;
   online.playerName = ctx.playerName;
-  online.sessionToken = ctx.sessionToken || '';
   online.serverUrl = ctx.serverUrl;
+  online.manualClose = false;
+  persistOnlineIdentity();
+
+  const existing = online.ws;
+  if(existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)){
+    if(!options.force) return;
+    try{ existing.close(1000, 'reconnect-refresh'); }catch(_){ }
+  }
 
   try{
     online.ws = new WebSocket(online.serverUrl);
   }catch(err){
     console.warn('[ONLINE] websocket init failed', err);
+    online.lastError = 'Socket-Start fehlgeschlagen';
+    updateOnlineDebugBadge();
+    scheduleOnlineReconnect('ws-init-failed');
     return;
   }
 
   online.ws.addEventListener('open', ()=>{
+    clearReconnectTimer();
     online.connected = true;
+    online.joined = false;
+    online.reconnectAttempt = 0;
     online.lastError = null;
     updateOnlineDebugBadge();
     console.info('[ONLINE] connected', online.serverUrl, online.roomCode, online.playerId);
@@ -1023,22 +1072,21 @@ function connectOnlineAuthority(){
     }
     if(type === 'room_joined' || type === 'room_created'){
       online.joined = true;
-      if(msg.self) applyOnlineSelf(msg.self, msg.room || null);
+      online.authoritativeMoveActorId = null;
+      applyOnlineSelf(msg.self);
       if(msg.room) applyServerRoomState(msg.room, { forceNeedRoll:false, silentDraw:false });
-      if(sendServerAction('turn_update', { turnIndex:Number(state.turn||0), phase:String(state.phase||'needRoll') })){
-        // only as soft sync for reconnect; server validates later on real actions
-      }
       try{ online.ws.send(JSON.stringify({ type:'sync_request' })); }catch(_){ }
       return;
     }
     if(type === 'room_state'){
-      if(msg.self) applyOnlineSelf(msg.self, msg.room || null);
+      applyOnlineSelf(msg.self);
       if(msg.room) applyServerRoomState(msg.room, { forceNeedRoll:false, silentDraw:false });
       return;
     }
     if(type === 'game_started'){
       online.joined = true;
       online.authoritativeMoveActorId = null;
+      applyOnlineSelf(msg.self);
       if(msg.room) applyServerRoomState(msg.room, { forceNeedRoll:true, silentDraw:false });
       state.phase = 'needRoll';
       state.roll = null;
@@ -1107,11 +1155,14 @@ function connectOnlineAuthority(){
       clearPendingRequest(String(msg.message || 'Serverfehler'));
       console.warn('[ONLINE] server error', msg.message);
       pushOnlineTrace(`[ERR] ${msg.message || 'server error'}`);
-      if(typeof msg.message === 'string' && /Reconnect abgelehnt|Spiel läuft bereits\. Reconnect nur mit gespeicherter Spieler-ID \+ Session\./i.test(msg.message)){
-        clearOnlineIdentity();
-        online.sessionToken = '';
-      }
+      online.lastError = String(msg.message || 'Serverfehler');
       if(msg.message) setStatus(String(msg.message));
+      if(/Reconnect abgelehnt|Session ungültig|Spiel läuft bereits\. Reconnect nur/i.test(String(msg.message || ''))){
+        clearOnlineIdentity();
+        online.playerId = null;
+        online.sessionToken = null;
+      }
+      updateOnlineDebugBadge();
       return;
     }
   });
@@ -1119,8 +1170,11 @@ function connectOnlineAuthority(){
   online.ws.addEventListener('close', ()=>{
     online.connected = false;
     online.joined = false;
+    online.reconnectAttempt += 1;
     clearPendingRequest('Socket getrennt');
     console.warn('[ONLINE] disconnected');
+    updateOnlineDebugBadge();
+    scheduleOnlineReconnect('socket-close');
   });
   online.ws.addEventListener('error', (err)=>{
     online.lastError = 'Socket-Fehler';
@@ -2832,224 +2886,250 @@ const FORCE_EVENT_CARD_ID = null;
 let eventForceCardId = null; // UI: forced event card (persistent until changed)
 
 const EVENT_DECK = [
-{ 
+  {
     id:"joker_pick6",
     title:"Zufälliger Joker",
     text:"Wähle 1 von 6 Karten – du bekommst den Joker dahinter.",
-    effect:"joker_pick6"
+    effect:"joker_pick6",
+    count:50
   },
   {
     id:"joker_wheel",
     title:"Joker-Glücksrad",
     text:"Drehe das Glücksrad: Erst Joker, dann Anzahl (1–3).",
-    effect:"joker_wheel"
+    effect:"joker_wheel",
+    count:10
   },
   {
     id:"jokers_all6",
     title:"Alle 6 Joker",
     text:"Du erhältst +1 von jedem Joker (6 Stück).",
-    effect:"jokers_all6"
+    effect:"jokers_all6",
+    count:1
   },
   {
     id:"joker_rain",
     title:"Joker-Regen",
     text:"Alle anderen Spieler erhalten 2 zufällige Joker.",
-    effect:"joker_rain"
+    effect:"joker_rain",
+    count:10
   },
   {
     id:"shuffle_pieces",
     title:"Figuren mischen",
     text:"Alle Spielfiguren (außer Start, Schild, Portal) werden neu gemischt.",
-    effect:"shuffle_pieces"
+    effect:"shuffle_pieces",
+    count:1
   },
   {
     id:"start_spawn",
     title:"Startfeld-Spawn",
     text:"Alle Figuren auf Startfeldern werden nacheinander (0,5s) auf freie Felder verteilt.",
-    effect:"start_spawn"
+    effect:"start_spawn",
+    count:1
   },
   {
     id:"spawn_barricades3",
     title:"Barrikaden-Verstärkung",
     text:"3 zusätzliche Barrikaden erscheinen (auch auf Ereignis- & Siegpunktfeldern).",
-    effect:"spawn_barricades3"
+    effect:"spawn_barricades3",
+    count:5
   },
   {
     id:"spawn_barricades10",
     title:"Barrikaden-Invasion",
     text:"10 zusätzliche Barrikaden erscheinen (auch auf Ereignis- & Siegpunktfeldern).",
-    effect:"spawn_barricades10"
+    effect:"spawn_barricades10",
+    count:1
   },
   {
     id:"spawn_barricades5",
     title:"Barrikaden-Nachschub",
     text:"5 zusätzliche Barrikaden erscheinen (auch auf Ereignis- & Siegpunktfeldern).",
-    effect:"spawn_barricades5"
+    effect:"spawn_barricades5",
+    count:3
   },
   {
     id:"move_barricade1",
     title:"Barrikade versetzen",
     text:"Du musst 1 Barrikade auf ein anderes Feld versetzen.",
-    effect:"move_barricade1"
+    effect:"move_barricade1",
+    count:5
   },
   {
     id:"move_barricade2",
     title:"Zwei Barrikaden versetzen",
     text:"Du musst 2 Barrikaden auf andere Felder versetzen.",
-    effect:"move_barricade2"
+    effect:"move_barricade2",
+    count:3
   },
   {
     id:"barricades_reset_initial",
     title:"Barrikaden-Reset",
     text:"Alle Barrikaden werden auf die Startpositionen zurückgesetzt (gleiche Anzahl).",
-    effect:"barricades_reset_initial"
-  }
-,
+    effect:"barricades_reset_initial",
+    count:5
+  },
   {
     id:"barricades_shuffle",
     title:"Barrikaden mischen",
     text:"Alle Barrikaden werden neu gemischt und auf neue Felder verteilt.",
-    effect:"barricades_shuffle"
+    effect:"barricades_shuffle",
+    count:1
   },
   {
     id:"barricades_on_event_and_goal",
     title:"Barrikaden-Invasion",
     text:"Auf jedes Ereignisfeld und auf das Zielfeld wird je 1 zusätzliche Barrikade platziert.",
-    effect:"barricades_on_event_and_goal"
+    effect:"barricades_on_event_and_goal",
+    count:2
   },
   {
     id:"barricades_half_remove",
     title:"Barrikaden verfallen",
     text:"Die Hälfte aller Barrikaden verschwindet vom Brett.",
-    effect:"barricades_half_remove"
+    effect:"barricades_half_remove",
+    count:2
   },
   {
     id:"barricade_jump_reroll",
     title:"Sturmangriff",
     text:"Du darfst nochmal würfeln. Für diesen ganzen Zug darfst du Barrikaden auf dem Weg überspringen. Landest du auf einer Barrikade, sammelst du sie ein und darfst sie neu platzieren.",
-    effect:"barricade_jump_reroll"
+    effect:"barricade_jump_reroll",
+    count:4
   },
   {
     id:"spawn_one_boss",
     title:"Ein Boss erscheint",
     text:"Ein zufälliger Boss erscheint auf einem freien Bossfeld. Maximal 2 Bosse gleichzeitig.",
-    effect:"spawn_one_boss"
+    effect:"spawn_one_boss",
+    count:5
   },
   {
     id:"spawn_two_bosses",
     title:"Zwei Bosse erscheinen",
     text:"Bis zu zwei zufällige Bosse erscheinen auf freien Bossfeldern. Maximal 2 Bosse insgesamt.",
-    effect:"spawn_two_bosses"
+    effect:"spawn_two_bosses",
+    count:1
   },
   {
     id:"extra_roll_event",
     title:"Du darfst nochmal würfeln",
     text:"Du darfst sofort noch einmal würfeln.",
-    effect:"extra_roll_event"
+    effect:"extra_roll_event",
+    count:3
   },
   {
     id:"all_to_start",
     title:"Alle zurück zum Start",
     text:"Alle Spieler müssen zurück auf ihre Startfelder.",
-    effect:"all_to_start"
+    effect:"all_to_start",
+    count:1
   },
   {
     id:"lose_all_jokers",
     title:"Du verlierst alle Joker",
     text:"Alle Joker deines Teams gehen verloren.",
-    effect:"lose_all_jokers"
+    effect:"lose_all_jokers",
+    count:1
   },
   {
     id:"respawn_all_events",
     title:"Ereignisfelder neu",
     text:"Alle 6 Ereignisfelder werden nacheinander neu gespawnt.",
-    effect:"respawn_all_events"
-  }
-  ,
+    effect:"respawn_all_events",
+    count:2
+  },
   {
     id:"spawn_double_goal",
     title:"Doppel-Zielfeld",
     text:"Ein zusätzliches Zielfeld mit doppelten Punkten erscheint. Es ist einmalig und spawnt nach dem Einsammeln nicht neu.",
-    effect:"spawn_double_goal"
-  }
-  ,
+    effect:"spawn_double_goal",
+    count:3
+  },
   {
     id:"dice_duel",
     title:"Würfel-Duell",
     text:"Alle würfeln automatisch. Der niedrigste Wurf gibt dem höchsten Wurf 1 zufälligen Joker. Bei Gleichstand wird erneut gewürfelt. Hat der Verlierer keinen Joker, geht der Gewinner leer aus.",
-    effect:"dice_duel"
-  }
-  ,
+    effect:"dice_duel",
+    count:1
+  },
   {
     id:"lose_one_point",
     title:"Du verlierst 1 Siegpunkt",
     text:"Dein Team verliert 1 Siegpunkt. Minimum ist 0.",
-    effect:"lose_one_point"
-  }
-  ,
+    effect:"lose_one_point",
+    count:1
+  },
   {
     id:"gain_one_point",
     title:"Du bekommst 1 Siegpunkt",
     text:"Dein Team erhält 1 Siegpunkt.",
-    effect:"gain_one_point"
-  }
-  ,
+    effect:"gain_one_point",
+    count:5
+  },
   {
     id:"gain_two_points",
     title:"Du erhältst 2 Siegpunkte",
     text:"Dein Team erhält 2 Siegpunkte.",
-    effect:"gain_two_points"
-  }
-  ,
+    effect:"gain_two_points",
+    count:2
+  },
   {
     id:"point_transfer_most_to_least",
     title:"Punktetausch",
     text:"Das Team mit den meisten Siegpunkten gibt dem Team mit den wenigsten 1 Siegpunkt. Bei Gleichstand entscheidet ein Glücksrad.",
-    effect:"point_transfer_most_to_least"
-  }
-  ,
+    effect:"point_transfer_most_to_least",
+    count:2
+  },
   {
     id:"back_to_start",
     title:"Zurück zum Start",
     text:"Alle eigenen Figuren müssen zurück auf die Startfelder deines Teams.",
-    effect:"back_to_start"
-  }
-  ,
+    effect:"back_to_start",
+    count:1
+  },
   {
     id:"others_to_start",
     title:"Alle anderen zurück zum Start",
     text:"Alle anderen Spieler müssen komplett zurück auf ihre Startfelder.",
-    effect:"others_to_start"
-  }
-  ,
+    effect:"others_to_start",
+    count:1
+  },
   {
     id:"steal_one_point",
     title:"Klaue 1 Siegpunkt",
     text:"Du klaust 1 Siegpunkt von einem zufälligen Mitspieler.",
-    effect:"steal_one_point"
-  }
-  ,
+    effect:"steal_one_point",
+    count:1
+  },
   {
     id:"sprint_5",
     title:"Laufe 5 Felder",
     text:"Du darfst sofort 1 eigene Figur um 5 Felder bewegen.",
-    effect:"sprint_5"
-  }
-  ,
+    effect:"sprint_5",
+    count:5
+  },
   {
     id:"sprint_10",
     title:"Laufe 10 Felder",
     text:"Du darfst sofort 1 eigene Figur um 10 Felder bewegen.",
-    effect:"sprint_10"
-  }
-  ,
+    effect:"sprint_10",
+    count:5
+  },
   {
     id:"spawn_bonus_light",
     title:"Zusätzliches Lichtfeld",
     text:"Ein zusätzliches Lichtfeld erscheint auf dem Brett. Nach dem Einsammeln verschwindet es wieder.",
-    effect:"spawn_bonus_light"
+    effect:"spawn_bonus_light",
+    count:5
   }
 ];
+
+function getEventCardWeight(card){
+  return Math.max(0, Number(card?.count || 0) || 0);
+}
+
 
 // ---- Event Effect: 3 zusätzliche Barrikaden spawnen ----
 // Darf auf Ereignisfeldern & Siegpunktfeld spawnen.
@@ -5344,7 +5424,26 @@ function pickRandomEventCard(){
     const forced = EVENT_DECK.find(c=>c && c.id===FORCE_EVENT_CARD_ID);
     if(forced) return forced;
   }
-  return EVENT_DECK[Math.floor(Math.random()*EVENT_DECK.length)];
+
+  const weighted = [];
+  for(const card of EVENT_DECK){
+    const weight = getEventCardWeight(card);
+    if(weight <= 0) continue;
+    weighted.push({ card, upto: weight });
+  }
+
+  const total = weighted.reduce((sum, entry)=>sum + entry.upto, 0);
+  if(total <= 0){
+    return EVENT_DECK[Math.floor(Math.random()*EVENT_DECK.length)];
+  }
+
+  let roll = Math.floor(Math.random() * total) + 1;
+  for(const entry of weighted){
+    roll -= entry.upto;
+    if(roll <= 0) return entry.card;
+  }
+
+  return weighted[weighted.length - 1].card;
 }
 
 
@@ -7646,7 +7745,8 @@ function ensureEventSelectUI(){
       seen.add(c.id);
       const o = document.createElement("option");
       o.value = c.id;
-      o.textContent = c.title;
+      const weight = getEventCardWeight(c);
+      o.textContent = weight > 0 ? `${c.title} (x${weight})` : `${c.title} (x0)`;
       sel.appendChild(o);
     }
 
