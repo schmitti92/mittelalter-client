@@ -101,6 +101,79 @@ button:hover{
     opacity:0.75;
     line-height:1.45;
 }
+
+.quickNameGrid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:8px;
+    margin-top:8px;
+    margin-bottom:14px;
+}
+
+.quickNameBtn{
+    margin-top:0;
+    padding:10px;
+    font-size:15px;
+    background:#1d4ed8;
+}
+
+.quickNameBtn:hover{
+    background:#2563eb;
+}
+
+.colorGrid{
+    display:grid;
+    grid-template-columns:repeat(4, 1fr);
+    gap:10px;
+    margin-top:8px;
+    margin-bottom:16px;
+}
+
+.colorBtn{
+    width:100%;
+    aspect-ratio:1 / 1;
+    margin-top:0;
+    padding:0;
+    border-radius:50%;
+    border:3px solid transparent;
+    background:transparent;
+    position:relative;
+    overflow:hidden;
+}
+
+.colorBtn::after{
+    content:'';
+    position:absolute;
+    inset:8px;
+    border-radius:50%;
+    box-shadow:0 0 0 2px rgba(255,255,255,0.15) inset;
+}
+
+.colorBtn[data-slot="0"]::after{
+    background:#ef4444;
+}
+.colorBtn[data-slot="1"]::after{
+    background:#3b82f6;
+}
+.colorBtn[data-slot="2"]::after{
+    background:#22c55e;
+}
+.colorBtn[data-slot="3"]::after{
+    background:#facc15;
+}
+
+.colorBtn.selected{
+    border-color:#ffffff;
+    box-shadow:0 0 0 3px rgba(255,255,255,0.18);
+}
+
+#selectedColorLabel{
+    margin-top:-4px;
+    margin-bottom:14px;
+    font-size:14px;
+    opacity:0.9;
+    min-height:18px;
+}
 </style>
 </head>
 
@@ -110,8 +183,24 @@ button:hover{
 
 <h1>Mittelalter Lobby</h1>
 
-<label>Dein Name</label>
+<label>Spielername</label>
 <input id="nameInput" placeholder="Name eingeben">
+
+<div class="quickNameGrid">
+    <button type="button" class="quickNameBtn" onclick="selectQuickName('Christoph')">Christoph</button>
+    <button type="button" class="quickNameBtn" onclick="selectQuickName('Vanessa')">Vanessa</button>
+    <button type="button" class="quickNameBtn" onclick="selectQuickName('David')">David</button>
+    <button type="button" class="quickNameBtn" onclick="selectQuickName('Gast')">Gast</button>
+</div>
+
+<label>Farbe wählen</label>
+<div class="colorGrid">
+    <button type="button" class="colorBtn" data-slot="0" aria-label="Rot" title="Rot" onclick="selectColor(0)"></button>
+    <button type="button" class="colorBtn" data-slot="1" aria-label="Blau" title="Blau" onclick="selectColor(1)"></button>
+    <button type="button" class="colorBtn" data-slot="2" aria-label="Grün" title="Grün" onclick="selectColor(2)"></button>
+    <button type="button" class="colorBtn" data-slot="3" aria-label="Gelb" title="Gelb" onclick="selectColor(3)"></button>
+</div>
+<div id="selectedColorLabel">Noch keine Farbe gewählt</div>
 
 <button onclick="createRoom()">Raum erstellen</button>
 
@@ -134,6 +223,6 @@ button:hover{
 
 </div>
 
-<script src="mittelalter.online.js?v=5"></script>
+<script src="mittelalter.online.js?v=6"></script>
 </body>
 </html>
