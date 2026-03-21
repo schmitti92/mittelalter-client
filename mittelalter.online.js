@@ -1,6 +1,8 @@
 (() => {
   const STORAGE_KEY = 'mittelalterLobby';
   const DEFAULT_SERVER = localStorage.getItem('mittelalterServerUrl') || 'https://mittelalter-server.onrender.com';
+  const PLAYER_NAMES = ['Christoph', 'Vanessa', 'David', 'Gast'];
+  const COLOR_NAMES = ['Rot', 'Blau', 'Grün', 'Gelb'];
 
   let socket = null;
   let currentServer = DEFAULT_SERVER;
@@ -10,16 +12,17 @@
   const $ = (id) => document.getElementById(id);
 
   function normalizeName(name) {
-    return String(name || '').trim().slice(0, 24) || '';
+    const clean = String(name || '').trim().slice(0, 24);
+    return PLAYER_NAMES.includes(clean) ? clean : '';
   }
 
   function normalizeRoom(code) {
     return String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
   }
 
-  function normalizeSlotIndex(slotIndex) {
-    const n = Number(slotIndex);
-    return Number.isInteger(n) && n >= 0 && n < 4 ? n : null;
+  function normalizeSlotIndex(value) {
+    const n = Number(value);
+    return Number.isInteger(n) && n >= 0 && n < COLOR_NAMES.length ? n : null;
   }
 
   function loadState() {
@@ -46,12 +49,15 @@
       ...patch,
     };
 
+    if (!normalizeName(next.playerName)) next.playerName = '';
+    next.roomCode = normalizeRoom(next.roomCode);
+    next.slotIndex = normalizeSlotIndex(next.slotIndex);
+
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     sessionStorage.setItem('playerName', next.playerName || '');
     sessionStorage.setItem('roomCode', next.roomCode || '');
     sessionStorage.setItem('playerId', next.playerId || '');
     sessionStorage.setItem('sessionToken', next.sessionToken || '');
-    sessionStorage.setItem('slotIndex', next.slotIndex == null ? '' : String(next.slotIndex));
     sessionStorage.setItem('isHost', next.isHost ? 'true' : 'false');
     sessionStorage.setItem('mittelalterLastMode', 'online');
     sessionStorage.setItem('mittelalterGameOnlineMode', 'lobby_only');
@@ -60,7 +66,6 @@
     localStorage.setItem('roomCode', next.roomCode || '');
     localStorage.setItem('playerId', next.playerId || '');
     localStorage.setItem('sessionToken', next.sessionToken || '');
-    localStorage.setItem('slotIndex', next.slotIndex == null ? '' : String(next.slotIndex));
     localStorage.setItem('isHost', next.isHost ? 'true' : 'false');
     localStorage.setItem('mittelalterLastMode', 'online');
     localStorage.setItem('mittelalterGameOnlineMode', 'lobby_only');
@@ -76,8 +81,11 @@
     el.style.color = isError ? '#ffb4b4' : '';
   }
 
-  function slotLabel(slotIndex) {
-    return ['Rot', 'Blau', 'Grün', 'Gelb'][Number(slotIndex)] || `Slot ${Number(slotIndex) + 1}`;
+  function playerLabel(player) {
+    const name = String(player?.name || 'Spieler');
+    const teamIndex = normalizeSlotIndex(player?.slotIndex);
+    const colorText = teamIndex == null ? '' : ` · ${COLOR_NAMES[teamIndex]}`;
+    return `${name}${colorText}${player?.isHost ? ' 👑' : ''}${player?.connected === false ? ' (getrennt)' : ''}`;
   }
 
   function renderPlayers(players = []) {
@@ -96,33 +104,71 @@
     players.forEach((player) => {
       const div = document.createElement('div');
       div.className = 'player';
-      const colorText = slotLabel(player.slotIndex);
-      const label = `${player.name} · ${colorText}${player.isHost ? ' 👑' : ''}${player.connected === false ? ' (getrennt)' : ''}`;
-      div.innerText = label;
+      div.innerText = playerLabel(player);
       list.appendChild(div);
     });
+  }
+
+  function syncNameButtons(selectedName) {
+    document.querySelectorAll('.quickNameBtn[data-player-name]').forEach((btn) => {
+      const isSelected = btn.dataset.playerName === selectedName;
+      btn.classList.toggle('selected', isSelected);
+    });
+
+    const label = $('selectedPlayerLabel');
+    if (label) {
+      label.innerText = selectedName ? `Gewählt: ${selectedName}` : 'Noch kein Spieler gewählt';
+    }
+  }
+
+  function syncColorButtons(selectedSlotIndex, players = [], myPlayerId = '') {
+    const occupiedByOthers = new Set(
+      (players || [])
+        .filter((p) => p && p.id !== myPlayerId)
+        .map((p) => normalizeSlotIndex(p.slotIndex))
+        .filter((n) => n != null)
+    );
+
+    document.querySelectorAll('.colorBtn[data-slot]').forEach((btn) => {
+      const slotIndex = normalizeSlotIndex(btn.dataset.slot);
+      const isSelected = slotIndex === selectedSlotIndex;
+      const isLocked = occupiedByOthers.has(slotIndex);
+
+      btn.classList.toggle('selected', isSelected);
+      btn.classList.toggle('locked', !!isLocked);
+      btn.disabled = !!isLocked;
+      btn.setAttribute('aria-disabled', isLocked ? 'true' : 'false');
+      btn.title = slotIndex == null ? 'Farbe' : `${COLOR_NAMES[slotIndex]}${isLocked ? ' (belegt)' : ''}`;
+    });
+
+    const label = $('selectedColorLabel');
+    if (label) {
+      if (selectedSlotIndex == null) {
+        label.innerText = 'Noch keine Farbe gewählt';
+      } else if (occupiedByOthers.has(selectedSlotIndex)) {
+        label.innerText = `Gewählt: ${COLOR_NAMES[selectedSlotIndex]} (aktuell belegt)`;
+      } else {
+        label.innerText = `Gewählt: ${COLOR_NAMES[selectedSlotIndex]}`;
+      }
+    }
   }
 
   function syncUi() {
     const state = loadState();
     if ($('roomInput')) $('roomInput').value = state.roomCode || '';
 
-    if (typeof window.applyLobbySelectionFromState === 'function') {
-      window.applyLobbySelectionFromState(state);
-    }
-
-    if (typeof window.updateColorAvailability === 'function') {
-      window.updateColorAvailability(state.players || [], state.playerId || '');
-    }
-
     renderPlayers(state.players || []);
+    syncNameButtons(state.playerName || '');
+    syncColorButtons(normalizeSlotIndex(state.slotIndex), state.players || [], state.playerId || '');
 
     const hasRoom = !!state.roomCode;
-    const startBtn = document.querySelector('.startBtn');
+    const startBtn = $('startBtn');
     if (startBtn) {
-      startBtn.disabled = !hasRoom || !state.connected || !state.isHost;
-      startBtn.style.opacity = startBtn.disabled ? '0.6' : '1';
-      startBtn.style.cursor = startBtn.disabled ? 'not-allowed' : 'pointer';
+      const enabled = !!(hasRoom && state.connected && state.isHost);
+      startBtn.disabled = !enabled;
+      startBtn.style.opacity = enabled ? '1' : '0.6';
+      startBtn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+      startBtn.style.display = state.isHost ? 'block' : 'none';
       startBtn.innerText = state.isHost ? 'Spiel starten' : 'Auf Host warten';
     }
 
@@ -145,35 +191,15 @@
     return true;
   }
 
-  function getSelectionOrShowError() {
-    const state = loadState();
-    const domSelection = typeof window.getLobbySelection === 'function' ? window.getLobbySelection() : {};
-    const playerName = normalizeName(domSelection?.selectedName || state.playerName);
-    const slotIndex = normalizeSlotIndex(domSelection?.selectedSlotIndex ?? state.slotIndex);
-
-    if (!playerName) {
-      setInfo('Bitte einen Spieler-Button wählen.', true);
-      return null;
-    }
-
-    if (slotIndex == null) {
-      setInfo('Bitte eine freie Farbe wählen.', true);
-      return null;
-    }
-
-    saveState({ playerName, slotIndex });
-    return { playerName, slotIndex };
-  }
-
   function handleRoomState(room, infoText, self = null) {
     const state = loadState();
     const me = self || (room.players || []).find((p) => p.id === state.playerId) || null;
-    const slotIndex = normalizeSlotIndex(me?.slotIndex ?? state.slotIndex);
+    const slotIndex = me ? normalizeSlotIndex(me.slotIndex) : normalizeSlotIndex(state.slotIndex);
 
     saveState({
       roomCode: room.roomCode || state.roomCode,
-      playerId: me?.id || state.playerId || '',
-      playerName: me?.name || state.playerName || '',
+      playerName: me?.name || state.playerName,
+      playerId: me?.id || self?.playerId || state.playerId,
       sessionToken: self?.sessionToken || state.sessionToken || '',
       slotIndex,
       isHost: !!me?.isHost,
@@ -198,46 +224,73 @@
     switch (msg.type) {
       case 'hello': {
         const state = loadState();
-        const roomCode = normalizeRoom(state.roomCode);
-        if (roomCode) send({ type: 'sync_request' });
         setInfo('Verbunden. Du kannst jetzt einen Raum erstellen oder beitreten.');
+        if (state.roomCode && state.playerName && state.slotIndex != null) {
+          send({
+            type: 'join_room',
+            roomCode: state.roomCode,
+            name: state.playerName,
+            playerId: state.playerId || undefined,
+            sessionToken: state.sessionToken || undefined,
+            slotIndex: state.slotIndex,
+          });
+        } else if (state.roomCode) {
+          send({ type: 'sync_request' });
+        }
         syncUi();
         return;
       }
-      case 'room_created': {
-        const self = msg.self || {};
-        handleRoomState(msg.room, `Raum erstellt: ${msg.room.roomCode}`, {
-          id: self.playerId,
-          sessionToken: self.sessionToken,
-          name: self.name,
+      case 'room_created':
+        saveState({
+          roomCode: msg.room.roomCode,
+          playerId: msg.self.playerId,
+          sessionToken: msg.self.sessionToken || '',
+          playerName: msg.self.name,
+          slotIndex: normalizeSlotIndex(msg.self.slotIndex),
           isHost: true,
-          slotIndex: self.slotIndex,
+          players: msg.room.players,
+          started: false,
+          connected: true,
+        });
+        handleRoomState(msg.room, `Raum erstellt: ${msg.room.roomCode}`, {
+          playerId: msg.self.playerId,
+          sessionToken: msg.self.sessionToken || '',
+          name: msg.self.name,
+          slotIndex: normalizeSlotIndex(msg.self.slotIndex),
+          isHost: true,
         });
         return;
-      }
-      case 'room_joined': {
-        const self = msg.self || {};
+      case 'room_joined':
+        saveState({
+          roomCode: msg.room.roomCode,
+          playerId: msg.self.playerId,
+          sessionToken: msg.self.sessionToken || '',
+          playerName: msg.self.name,
+          slotIndex: normalizeSlotIndex(msg.self.slotIndex),
+          isHost: !!msg.self.isHost,
+          players: msg.room.players,
+          started: !!msg.room.gameState?.started,
+          connected: true,
+        });
         handleRoomState(msg.room, `Du bist Raum ${msg.room.roomCode} beigetreten.`, {
-          id: self.playerId,
-          sessionToken: self.sessionToken,
-          name: self.name,
-          isHost: !!self.isHost,
-          slotIndex: self.slotIndex,
+          playerId: msg.self.playerId,
+          sessionToken: msg.self.sessionToken || '',
+          name: msg.self.name,
+          slotIndex: normalizeSlotIndex(msg.self.slotIndex),
+          isHost: !!msg.self.isHost,
         });
         return;
-      }
       case 'room_state':
-        handleRoomState(msg.room, msg.info || `Raum ${msg.room.roomCode} synchronisiert.`);
+        handleRoomState(msg.room, msg.info || `Raum ${msg.room.roomCode} synchronisiert.`, msg.self || null);
         return;
       case 'game_started': {
-        if (msg.room) handleRoomState(msg.room, msg.info || 'Spiel startet …');
+        if (msg.room) handleRoomState(msg.room, msg.info || 'Spiel startet …', msg.self || null);
         const state = loadState();
         window.location.href = `Mittelalter.index.html?room=${encodeURIComponent(state.roomCode)}&player=${encodeURIComponent(state.playerName || '')}`;
         return;
       }
       case 'error_message':
         setInfo(msg.message || 'Serverfehler.', true);
-        syncUi();
         return;
       case 'noop':
       case 'pong':
@@ -282,38 +335,78 @@
     });
   }
 
+  window.selectQuickName = function selectQuickName(name) {
+    const normalized = normalizeName(name);
+    saveState({ playerName: normalized });
+    syncUi();
+  };
+
+  window.selectColor = function selectColor(slotIndex) {
+    const normalizedSlotIndex = normalizeSlotIndex(slotIndex);
+    const state = loadState();
+    const occupiedByOthers = new Set(
+      (state.players || [])
+        .filter((p) => p && p.id !== state.playerId)
+        .map((p) => normalizeSlotIndex(p.slotIndex))
+        .filter((n) => n != null)
+    );
+
+    if (normalizedSlotIndex == null || occupiedByOthers.has(normalizedSlotIndex)) {
+      setInfo('Diese Farbe ist bereits belegt.', true);
+      return;
+    }
+
+    saveState({ slotIndex: normalizedSlotIndex });
+    syncUi();
+  };
+
   window.createRoom = function createRoom() {
-    const selection = getSelectionOrShowError();
-    if (!selection) return;
-    send({
-      type: 'create_room',
-      name: selection.playerName,
-      slotIndex: selection.slotIndex,
-    });
+    const state = loadState();
+    const playerName = normalizeName(state.playerName);
+    const slotIndex = normalizeSlotIndex(state.slotIndex);
+
+    if (!playerName) {
+      setInfo('Bitte zuerst einen Spielernamen per Button wählen.', true);
+      return;
+    }
+    if (slotIndex == null) {
+      setInfo('Bitte zuerst eine Farbe wählen.', true);
+      return;
+    }
+
+    saveState({ playerName, slotIndex });
+    send({ type: 'create_room', name: playerName, slotIndex });
   };
 
   window.joinRoom = function joinRoom() {
-    const selection = getSelectionOrShowError();
-    if (!selection) return;
-
+    const state = loadState();
+    const playerName = normalizeName(state.playerName);
     const roomCode = normalizeRoom($('roomInput')?.value);
+    const slotIndex = normalizeSlotIndex(state.slotIndex);
+
     if ($('roomInput')) $('roomInput').value = roomCode;
 
+    if (!playerName) {
+      setInfo('Bitte zuerst einen Spielernamen per Button wählen.', true);
+      return;
+    }
+    if (slotIndex == null) {
+      setInfo('Bitte zuerst eine Farbe wählen.', true);
+      return;
+    }
     if (!roomCode) {
       setInfo('Bitte einen Raumcode eingeben.', true);
       return;
     }
 
-    const state = loadState();
-    saveState({ playerName: selection.playerName, roomCode, slotIndex: selection.slotIndex });
-
+    saveState({ playerName, roomCode, slotIndex });
     send({
       type: 'join_room',
       roomCode,
-      name: selection.playerName,
-      slotIndex: selection.slotIndex,
-      playerId: state.playerId || '',
-      sessionToken: state.sessionToken || '',
+      name: playerName,
+      playerId: state.playerId || undefined,
+      sessionToken: state.sessionToken || undefined,
+      slotIndex,
     });
   };
 
@@ -334,7 +427,16 @@
   };
 
   window.addEventListener('DOMContentLoaded', () => {
-    const state = loadState();
+    const state = saveState({
+      playerName: localStorage.getItem('playerName') || '',
+      roomCode: localStorage.getItem('roomCode') || '',
+      playerId: localStorage.getItem('playerId') || '',
+      sessionToken: localStorage.getItem('sessionToken') || '',
+      slotIndex: normalizeSlotIndex(loadState().slotIndex),
+    });
+    if (state.playerName && !PLAYER_NAMES.includes(state.playerName)) {
+      saveState({ playerName: '' });
+    }
     if ($('roomInput')) $('roomInput').value = state.roomCode || '';
     syncUi();
     connect();
