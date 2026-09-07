@@ -162,14 +162,29 @@
     syncColorButtons(normalizeSlotIndex(state.slotIndex), state.players || [], state.playerId || '');
 
     const hasRoom = !!state.roomCode;
+    const playerCount = Array.isArray(state.players) ? state.players.length : 0;
     const startBtn = $('startBtn');
     if (startBtn) {
-      const enabled = !!(hasRoom && state.connected && state.isHost);
+      const enabled = !!(hasRoom && state.connected && state.isHost && playerCount >= 2);
       startBtn.disabled = !enabled;
       startBtn.style.opacity = enabled ? '1' : '0.6';
       startBtn.style.cursor = enabled ? 'pointer' : 'not-allowed';
       startBtn.style.display = state.isHost ? 'block' : 'none';
-      startBtn.innerText = state.isHost ? 'Spiel starten' : 'Auf Host warten';
+      startBtn.innerText = state.isHost
+        ? (playerCount >= 2 ? 'Spiel starten' : 'Spiel starten (mind. 2 Spieler)')
+        : 'Auf Host warten';
+    }
+
+    const soloTestBtn = $('soloTestBtn');
+    if (soloTestBtn) {
+      const enabled = !!(hasRoom && state.connected && state.isHost && playerCount === 1 && !state.started);
+      soloTestBtn.disabled = !enabled;
+      soloTestBtn.style.opacity = enabled ? '1' : '0.6';
+      soloTestBtn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+      soloTestBtn.style.display = state.isHost ? 'block' : 'none';
+      soloTestBtn.innerText = playerCount === 1
+        ? '🧪 1-Spieler-Test starten'
+        : '🧪 1-Spieler-Test (nur allein im Raum)';
     }
 
     const serverBox = $('serverStatus');
@@ -416,7 +431,29 @@
       setInfo('Nur der Host darf das Spiel starten.', true);
       return;
     }
+    if (!Array.isArray(state.players) || state.players.length < 2) {
+      setInfo('Für ein normales Spiel werden mindestens 2 Spieler benötigt. Nutze zum Entwickeln den 1-Spieler-Test.', true);
+      return;
+    }
     send({ type: 'start_game' });
+  };
+
+  window.startSoloTest = function startSoloTest() {
+    const state = loadState();
+    if (!state.isHost) {
+      setInfo('Nur der Host darf den 1-Spieler-Test starten.', true);
+      return;
+    }
+    if (!state.roomCode || !state.connected) {
+      setInfo('Bitte zuerst einen Raum erstellen und die Serververbindung abwarten.', true);
+      return;
+    }
+    if (!Array.isArray(state.players) || state.players.length !== 1) {
+      setInfo('Der 1-Spieler-Test ist nur verfügbar, wenn genau ein Spieler im Raum ist.', true);
+      return;
+    }
+    setInfo('1-Spieler-Test wird serverseitig gestartet …');
+    send({ type: 'start_game', testMode: true });
   };
 
   window.goBack = function goBack() {
