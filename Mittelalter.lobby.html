@@ -87,6 +87,14 @@ button:hover{
     background:#34d977;
 }
 
+.testBtn{
+    background:#d97706;
+}
+
+.testBtn:hover{
+    background:#f59e0b;
+}
+
 .backBtn{
     background:#555;
 }
@@ -234,12 +242,14 @@ button:hover{
 
 <button id="startBtn" class="startBtn" onclick="startGame()">Spiel starten</button>
 
+<button id="soloTestBtn" class="testBtn" onclick="startSoloTest()">🧪 1-Spieler-Test starten</button>
+
 <button class="backBtn" onclick="goBack()">Zur Spielauswahl</button>
 
-<div class="meta">Online-Modus aktiv. Kein Offline-Mock mehr in der Lobby.</div>
+<div class="meta">Online-Modus aktiv. Der 1-Spieler-Test nutzt weiterhin den echten Server für Würfel, Bewegungen, Events, Bosse und Barrikaden.</div>
 
 </div>
 
-<script src="mittelalter.online.js?v=12"></script>
+<script src="mittelalter.online.js?v=13"></script>
 </body>
 </html>
