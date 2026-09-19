@@ -351,6 +351,11 @@
   }
 
   window.selectQuickName = function selectQuickName(name) {
+    const state = loadState();
+    if (state.roomCode && state.playerId && Array.isArray(state.players) && state.players.some((p) => p?.id === state.playerId)) {
+      setInfo('Name und Farbe sind im Raum gesperrt. Verlasse den Raum, um sie zu ändern.', true);
+      return;
+    }
     const normalized = normalizeName(name);
     saveState({ playerName: normalized });
     syncUi();
@@ -359,6 +364,10 @@
   window.selectColor = function selectColor(slotIndex) {
     const normalizedSlotIndex = normalizeSlotIndex(slotIndex);
     const state = loadState();
+    if (state.roomCode && state.playerId && Array.isArray(state.players) && state.players.some((p) => p?.id === state.playerId)) {
+      setInfo('Name und Farbe sind im Raum gesperrt. Verlasse den Raum, um sie zu ändern.', true);
+      return;
+    }
     const occupiedByOthers = new Set(
       (state.players || [])
         .filter((p) => p && p.id !== state.playerId)
@@ -460,7 +469,16 @@
     intentionallyClosed = true;
     try { send({ type: 'leave_room' }); } catch (_err) {}
     try { socket?.close(); } catch (_err) {}
-    window.location.href = 'index.html';
+    saveState({ roomCode:'', playerId:'', sessionToken:'', players:[], isHost:false, started:false, connected:false });
+    try {
+      localStorage.removeItem('roomCode');
+      localStorage.removeItem('playerId');
+      localStorage.removeItem('sessionToken');
+      sessionStorage.removeItem('roomCode');
+      sessionStorage.removeItem('playerId');
+      sessionStorage.removeItem('sessionToken');
+    } catch (_err) {}
+    window.location.href = 'Mittelalter.index.html';
   };
 
   window.addEventListener('DOMContentLoaded', () => {
