@@ -15,6 +15,7 @@ const canvas = document.getElementById("boardCanvas");
 canvas.style.touchAction = "none";
 const ctx = canvas.getContext("2d");
 const btnRoll = document.getElementById("btnRoll");
+const btnPassNoMove = document.getElementById("btnPassNoMove");
 const btnFit = document.getElementById("btnFit");
 const dieBox = document.getElementById("dieBox");
 const statusLine = document.getElementById("statusLine");
@@ -191,8 +192,17 @@ function installOnScreenConsole(){
   addLine("READY", ["On-screen console installed. Press ` or click 🪲."]);
 }
 
-document.addEventListener("DOMContentLoaded", installOnScreenConsole);
-document.addEventListener("DOMContentLoaded", ()=>{ try{ ensureTopTurnUI(); }catch(_){ } try{ ensureOnlineDebugBadge(); }catch(_){ } });
+
+function isDebugUiEnabled(){
+  try{
+    const qp = new URLSearchParams(location.search);
+    if(qp.get('debug') === '1') return true;
+  }catch(_){ }
+  try{ return online?.room?.gameState?.testMode === 'single-player'; }catch(_){ return false; }
+}
+
+document.addEventListener("DOMContentLoaded", ()=>{ if(isDebugUiEnabled()) installOnScreenConsole(); });
+document.addEventListener("DOMContentLoaded", ()=>{ try{ ensureTopTurnUI(); }catch(_){ } try{ if(isDebugUiEnabled()) ensureOnlineDebugBadge(); }catch(_){ } });
 
 const TEAM_COLORS = {
   1: "#b33a3a", // Rot – Wappenrot
@@ -423,6 +433,7 @@ const state = {
   eventMoveBarricadesRemaining: 0,
   initialBarricadeLayout: null,
   ignoreBarricadesThisTurn: false,
+  noLegalMove: false,
 
   // --- Landing continuation (after placing a picked-up barricade) ---
   resumeLanding: null,
@@ -796,6 +807,7 @@ function isLocalPlayersTurn(){
 }
 
 function ensureOnlineDebugBadge(){
+  if(!isDebugUiEnabled()) return null;
   if(online.debugBadgeEl) return online.debugBadgeEl;
   const el = document.createElement('div');
   el.id = 'onlineDebugBadge';
@@ -827,7 +839,12 @@ function onlineStateLabel(){
   return 'online';
 }
 function updateOnlineDebugBadge(){
+  if(!isDebugUiEnabled()){
+    if(online.debugBadgeEl){ try{ online.debugBadgeEl.remove(); }catch(_){ } online.debugBadgeEl = null; }
+    return;
+  }
   const el = ensureOnlineDebugBadge();
+  if(!el) return;
   const lines = [];
   lines.push(`Online: ${onlineStateLabel()}`);
   const slotLabel = online.slotIndex == null ? '–' : String(online.slotIndex + 1);
@@ -909,6 +926,19 @@ function applyServerRoomState(room, opts={}){
     setPlayerCount(playerCount, { reset:true });
   }
 
+  if(Array.isArray(room.players) && room.players.length){
+    state.players = room.players.map((player, idx)=>{
+      const explicitTeam = Number(player?.team || 0);
+      if(Number.isInteger(explicitTeam) && explicitTeam >= 1 && explicitTeam <= 4) return explicitTeam;
+      const slot = Number(player?.slotIndex);
+      return Number.isInteger(slot) && slot >= 0 && slot <= 3 ? slot + 1 : idx + 1;
+    });
+    state.playerCount = state.players.length;
+  }
+  if(room.gameState && Object.prototype.hasOwnProperty.call(room.gameState, 'debugForcedEventCardId')){
+    eventForceCardId = room.gameState.debugForcedEventCardId || null;
+  }
+
   const turnIndex = Math.max(0, Math.min(playerCount - 1, Number(room.gameState?.turnIndex || 0)));
   state.turn = turnIndex;
 
@@ -938,6 +968,9 @@ function applyServerRoomState(room, opts={}){
 
   updateTurnBadge();
   updateTurnSystemUI();
+  try{ ensureEventSelectUI(); }catch(_){ }
+  try{ updateBossUI(); }catch(_){ }
+  updateOnlineDebugBadge();
 
   if(!opts.silentDraw){
     draw();
@@ -1102,9 +1135,14 @@ function applyServerSnapshot(snapshot, opts={}){
   if(snapshot.jokers && typeof snapshot.jokers === 'object') state.jokers = JSON.parse(JSON.stringify(snapshot.jokers));
   if(snapshot.jokerFlags && typeof snapshot.jokerFlags === 'object') state.jokerFlags = Object.assign({ double:false, allcolors:false }, snapshot.jokerFlags);
   if('selected' in snapshot) state.selected = snapshot.selected || null;
+  state.pendingPortal = snapshot.pendingPortal && typeof snapshot.pendingPortal === 'object' ? Object.assign({}, snapshot.pendingPortal) : null;
+  state.pendingEventBarricadeMove = snapshot.pendingEventBarricadeMove && typeof snapshot.pendingEventBarricadeMove === 'object'
+    ? Object.assign({}, snapshot.pendingEventBarricadeMove)
+    : null;
   if('pendingSix' in snapshot) state.pendingSix = !!snapshot.pendingSix;
   if('extraRoll' in snapshot) state.extraRoll = !!snapshot.extraRoll;
   if('ignoreBarricadesThisTurn' in snapshot) state.ignoreBarricadesThisTurn = !!snapshot.ignoreBarricadesThisTurn;
+  if('noLegalMove' in snapshot) state.noLegalMove = !!snapshot.noLegalMove;
   if('roll' in snapshot){
     state.roll = Number(snapshot.roll || 0) || null;
     dieBox.textContent = state.roll ? String(state.roll) : '–';
@@ -1118,7 +1156,19 @@ function applyServerSnapshot(snapshot, opts={}){
   state.portalHighlighted.clear();
   state.resumeLanding = null;
   if(state.phase === 'placeBarricade'){
+    state.jokerMode = null;
     computePlaceTargets();
+  } else if(state.phase === 'eventBarricadeMove' && state.pendingEventBarricadeMove){
+    state.jokerMode = 'moveBarricadePick';
+    state.jokerData = {};
+    state.eventMoveBarricadesRemaining = Math.max(0, Number(state.pendingEventBarricadeMove.remaining || 0));
+  } else if(state.phase === 'usePortal' && state.pendingPortal){
+    state.jokerMode = null;
+    state.selected = state.pendingPortal.pieceId || state.selected;
+    computePortalTargets(state.pendingPortal.currentPortalId || state.pieces.find(p=>p.id===state.selected)?.node || null);
+  } else if(state.jokerMode === 'moveBarricadePick' || state.jokerMode === 'moveBarricadePlace'){
+    state.jokerMode = null;
+    state.jokerData = {};
   }
   try{ updateBossUI(); }catch(_){ }
   try{ updateJokerUI(); }catch(_){ }
@@ -1164,6 +1214,17 @@ function requestServerMove(pieceId, targetId, legalTargets){
     stateSnapshot: buildServerMoveSnapshot()
   });
 }
+function requestServerPortalUse(targetId){
+  if(!isOnlineAuthorityActive()) return false;
+  if(!isLocalPlayersTurn()){
+    setStatus(`Nicht du bist dran. Team ${currentTeam()} steuert die Portalwahl.`);
+    return true;
+  }
+  pushOnlineTrace(`send portal target=${targetId}`);
+  setStatus('Server prüft das Portalziel...');
+  return sendServerAction('portal_use', { targetId: String(targetId || '') });
+}
+
 function requestServerPlaceBarricade(nodeId){
   if(!isOnlineAuthorityActive()) return false;
   if(!isLocalPlayersTurn()){
@@ -1178,6 +1239,28 @@ function requestServerPlaceBarricade(nodeId){
   setStatus('Server platziert die Barrikade...');
   return sendServerAction('place_barricade', {
     nodeId: String(nodeId || '')
+  });
+}
+
+function requestServerPassNoMove(){
+  if(!isOnlineAuthorityActive()) return false;
+  if(!isLocalPlayersTurn()) return false;
+  pushOnlineTrace('send pass_no_move');
+  setStatus('Zug ohne Bewegung wird beendet...');
+  return sendServerAction('pass_no_move', {});
+}
+
+function requestServerEventBarricadeMove(fromNodeId, toNodeId){
+  if(!isOnlineAuthorityActive()) return false;
+  if(!isLocalPlayersTurn()){
+    setStatus(`Nicht du bist dran. Team ${currentTeam()} steuert das Barrikaden-Ereignis.`);
+    return true;
+  }
+  pushOnlineTrace(`send event barricade ${fromNodeId} -> ${toNodeId}`);
+  setStatus('Server versetzt die Ereignis-Barrikade...');
+  return sendServerAction('event_move_barricade', {
+    fromNodeId: String(fromNodeId || ''),
+    toNodeId: String(toNodeId || '')
   });
 }
 
@@ -1386,6 +1469,12 @@ function connectOnlineAuthority(options={}){
       if(msg.gameState?.phase === 'gameOver' && state.gameOver){
         showWinOverlay(state.winnerTeam || currentTeam());
       }
+      if(msg.gameState?.phase === 'eventBarricadeMove' && state.pendingEventBarricadeMove && isLocalPlayersTurn()){
+        state.jokerMode = 'moveBarricadePick';
+        state.jokerData = {};
+        state.jokerHighlighted.clear();
+      }
+      if(msg.info) setStatus(String(msg.info));
       draw();
       return;
     }
@@ -1541,21 +1630,25 @@ function isPortalNode(id){
 
 function computePortalTargets(currentPortalId){
   ensurePortalState();
-  ensurePortalState();
   state.portalHighlighted.clear();
+  const current = nodesById.get(currentPortalId);
+  if(!current || current.type !== "portal") return;
+  const group = String(current?.props?.portalId || "A");
   for(const n of nodes){
     if(n.type !== "portal") continue;
     if(n.id === currentPortalId) continue;
-    if(state.occupied.has(n.id)) continue; // Zielportal muss frei sein
+    if(String(n?.props?.portalId || "A") !== group) continue;
+    if(state.occupied.has(n.id)) continue;
     state.portalHighlighted.add(n.id);
   }
 }
 
 function isFreeForBarricade(id){
-  // frei heißt: kein Spieler drauf UND keine Barrikade drauf
+  // Frei heißt: kein Spieler, keine aktive Bossfigur und keine Barrikade auf dem Feld.
   if (state.occupied.has(id)) return false;
   if (barricades.has(id)) return false;
-  // Sicherheit: nicht auf Start platzieren
+  if (Array.isArray(state.bosses) && state.bosses.some(b=>b && b.alive!==false && b.node===id)) return false;
+  // Nur Startfelder sind grundsätzlich ausgeschlossen; Spezialfelder bleiben erlaubt.
   if (isStartNode(id)) return false;
   return true;
 }
@@ -1652,6 +1745,7 @@ function getPhaseLabel(phase){
     case 'choosePiece': return 'Figur wählen';
     case 'chooseTarget': return 'Zielfeld wählen';
     case 'placeBarricade': return 'Barrikade platzieren';
+    case 'eventBarricadeMove': return 'Barrikade versetzen';
     case 'usePortal': return 'Portal';
     case 'bossPhase': return 'Bossphase';
     case 'resolveMove': return 'Zug wird geprüft';
@@ -1667,6 +1761,12 @@ function updateTurnSystemUI(){
   if(curPlayerEl) curPlayerEl.textContent = playerLabel || '–';
   if(curPhaseEl) curPhaseEl.textContent = phaseLabel || '–';
 
+  const playerCountControl = document.getElementById('playerCount');
+  if(playerCountControl){
+    playerCountControl.disabled = !!online.enabled;
+    playerCountControl.title = online.enabled ? 'Spieleranzahl wird von der Lobby festgelegt.' : 'Spieleranzahl';
+  }
+
   if(btnRoll){
     const canRollLocal = !state.gameOver && state.phase === 'needRoll' && (!isOnlineAuthorityActive() || isLocalPlayersTurn());
     btnRoll.disabled = !canRollLocal;
@@ -1679,6 +1779,13 @@ function updateTurnSystemUI(){
           : (state.phase !== 'needRoll'
               ? `Aktuelle Phase: ${phaseLabel}`
               : 'Der andere Spieler ist am Zug'));
+  }
+
+  if(btnPassNoMove){
+    const canPass = !state.gameOver && !!state.noLegalMove && ['choosePiece','chooseTarget'].includes(state.phase) && (!isOnlineAuthorityActive() || isLocalPlayersTurn());
+    btnPassNoMove.hidden = !canPass;
+    btnPassNoMove.disabled = !canPass;
+    btnPassNoMove.title = canPass ? 'Kein legaler Zug: Zug ohne Bewegung beenden' : '';
   }
 }
 
@@ -1862,7 +1969,7 @@ function ensureBossState(){
   if(!Array.isArray(state.bossSpawnNodes)) state.bossSpawnNodes = [];
   if(typeof state.bossTick !== "number") state.bossTick = 0;
   if(typeof state.bossAuto !== "boolean") state.bossAuto = true;
-  if(typeof state.bossDebug !== "boolean") state.bossDebug = true;
+  if(typeof state.bossDebug !== "boolean") state.bossDebug = false;
   if(typeof state._bossRoundEndFlag !== "boolean") state._bossRoundEndFlag = false;
   if(typeof state.bossRoundNum !== "number") state.bossRoundNum = 0;
 }
@@ -2482,34 +2589,18 @@ function bossFieldHighlightDraw(n, R){
 
 // ---- Boss UI in Sidebar ----
 function ensureBossPanel(){
-  // Wir hängen es unter die Joker-Buttons (rechts in der Sidebar)
-  const anchor = jokerButtonsWrap || document.getElementById("sidebar") || document.body;
-  let host = document.getElementById("bossPanel");
-  if(host) return host;
+  const host = document.getElementById('bossCard') || document.getElementById('sidebar') || document.body;
+  let dbg = document.getElementById('bossDebugControls');
 
-  host = document.createElement("div");
-  host.id = "bossPanel";
-  host.style.cssText = [
-    "margin-top:12px",
-    "padding:12px",
-    "border-radius:14px",
-    "background:rgba(10,12,18,.42)",
-    "border:1px solid rgba(255,255,255,.10)",
-    "color:rgba(245,250,255,.92)",
-    "font:600 13px system-ui, -apple-system, Segoe UI, Roboto, Arial"
-  ].join(";");
+  if(!isDebugUiEnabled()){
+    state.bossDebug = false;
+    if(dbg) dbg.remove();
+    return host;
+  }
+  state.bossDebug = true;
+  if(dbg) return host;
 
-  const title = document.createElement("div");
-  title.textContent = "Bosse";
-  title.style.cssText = "font-weight:800; margin-bottom:8px; letter-spacing:.2px;";
-  host.appendChild(title);
-
-  const list = document.createElement("div");
-  list.id = "bossPanelList";
-  host.appendChild(list);
-
-  // --- Debug Controls (immer sichtbar) ---
-  const dbg = document.createElement('div');
+  dbg = document.createElement('div');
   dbg.id = 'bossDebugControls';
   dbg.style.cssText = 'margin-top:10px; display:grid; grid-template-columns:1fr 1fr; gap:8px;';
 
@@ -2519,20 +2610,16 @@ function ensureBossPanel(){
     b.textContent = label;
     b.className = 'btn small';
     b.style.cssText = 'padding:10px 10px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.06); color:rgba(245,250,255,.92); font-weight:800; letter-spacing:.2px;';
-    b.onmouseenter = ()=>{ b.style.background='rgba(255,255,255,.10)'; };
-    b.onmouseleave = ()=>{ b.style.background='rgba(255,255,255,.06)'; };
     return b;
   }
 
-  // Spawn selector (Test)
   const sel = document.createElement('select');
   sel.id = 'bossSpawnSelect';
-  sel.style.cssText = 'grid-column:1 / -1; padding:10px 10px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:rgba(10,12,18,.35); color:rgba(245,250,255,.92); font-weight:800;';
-  // Options from BOSS_TYPES
+  sel.style.cssText = 'grid-column:1 / -1; padding:10px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:rgba(10,12,18,.35); color:rgba(245,250,255,.92); font-weight:800;';
   for(const k of Object.keys(BOSS_TYPES)){
     const o = document.createElement('option');
     o.value = k;
-    o.textContent = (BOSS_TYPES[k]?.name) ? BOSS_TYPES[k].name : k;
+    o.textContent = BOSS_TYPES[k]?.name || k;
     sel.appendChild(o);
   }
   dbg.appendChild(sel);
@@ -2542,68 +2629,28 @@ function ensureBossPanel(){
   const btnStep = mkBtn('btnBossStep','Boss Step');
   const btnToggle = mkBtn('btnBossToggleAI','Boss AI: AN');
   const btnClear = mkBtn('btnBossClear','Clear Bosses');
-
-  dbg.appendChild(btnSpawn);
-  dbg.appendChild(btnSpawnHunter);
-  dbg.appendChild(btnStep);
-  dbg.appendChild(btnToggle);
-  dbg.appendChild(btnClear);
+  for(const b of [btnSpawn, btnSpawnHunter, btnStep, btnToggle, btnClear]) dbg.appendChild(b);
 
   const hint = document.createElement('div');
   hint.id = 'bossDebugHint';
   hint.style.cssText = 'grid-column:1 / -1; margin-top:2px; opacity:.7; font-size:12px; line-height:1.25;';
-  hint.textContent = 'Test-Modus: Spawnen, Step, AI togglen, Clear.';
+  hint.textContent = 'Nur Testmodus: Boss-System gezielt prüfen.';
   dbg.appendChild(hint);
-
   host.appendChild(dbg);
 
-  // Wire once
   btnSpawn.onclick = ()=>{
     const t = document.getElementById('bossSpawnSelect')?.value || 'hunter';
-    if(isOnlineAuthorityActive()){
-      sendServerAction('boss_spawn_debug', { bossType: t });
-      return;
-    }
-    spawnBoss(t);
+    if(isOnlineAuthorityActive()) sendServerAction('boss_spawn_debug', { bossType: t }); else spawnBoss(t);
   };
-  btnSpawnHunter.onclick = ()=>{
-    if(isOnlineAuthorityActive()){
-      sendServerAction('boss_spawn_debug', { bossType: 'hunter' });
-      return;
-    }
-    spawnBoss('hunter');
-  };
-  btnStep.onclick = ()=>{
-    if(isOnlineAuthorityActive()){
-      sendServerAction('boss_step_debug', {});
-      return;
-    }
-    bossStepOnce();
-  };
-  btnClear.onclick = ()=>{
-    if(isOnlineAuthorityActive()){
-      sendServerAction('boss_clear_debug', {});
-      return;
-    }
-    clearBosses();
-  };
+  btnSpawnHunter.onclick = ()=>{ if(isOnlineAuthorityActive()) sendServerAction('boss_spawn_debug', { bossType:'hunter' }); else spawnBoss('hunter'); };
+  btnStep.onclick = ()=>{ if(isOnlineAuthorityActive()) sendServerAction('boss_step_debug', {}); else bossStepOnce(); };
+  btnClear.onclick = ()=>{ if(isOnlineAuthorityActive()) sendServerAction('boss_clear_debug', {}); else clearBosses(); };
   btnToggle.onclick = ()=>{
-    if(isOnlineAuthorityActive()){
-      setStatus('Boss-AI wird online nur vom Server gesteuert.');
-      return;
-    }
+    if(isOnlineAuthorityActive()) { setStatus('Boss-AI wird online ausschließlich vom Server gesteuert.'); return; }
     ensureBossState();
     state.bossAuto = !state.bossAuto;
     btnToggle.textContent = 'Boss AI: ' + (state.bossAuto ? 'AN' : 'AUS');
   };
-
-  // Insert after jokerButtonsWrap if possible
-  if(jokerButtonsWrap && jokerButtonsWrap.parentElement){
-    jokerButtonsWrap.parentElement.appendChild(host);
-  }else{
-    anchor.appendChild(host);
-  }
-
   return host;
 }
 
@@ -2625,15 +2672,18 @@ function updateBossUI(){
       tgl.style.cursor = "pointer";
     }
   }
-  const list = document.getElementById("bossPanelList");
+  const list = document.getElementById("bossList");
   if(!list) return;
 
+  const empty = document.getElementById('bossEmpty');
   const alive = state.bosses.filter(b=>b.alive!==false);
   if(!alive.length){
-    list.innerHTML = "<div style='opacity:.75'>Kein Boss aktiv</div>";
+    list.innerHTML = '';
+    if(empty) empty.style.display = '';
     return;
   }
 
+  if(empty) empty.style.display = 'none';
   list.innerHTML = "";
   for(const b of alive){
     const def = BOSS_TYPES[b.type] || {};
@@ -3220,7 +3270,7 @@ function overlayClickAllowed(ov, ms=350){
 // ---------- Event Cards (Ereignisse) ----------
 // TEST-MODUS: Wenn true, zieht JEDES Betreten eines Feldes eine Ereigniskarte (ideal zum Testen).
 // Für normales Spiel einfach auf false stellen.
-const FORCE_EVENT_EVERY_LANDING = true;
+const FORCE_EVENT_EVERY_LANDING = false;
 // TEST-Helfer: Wenn gesetzt (z.B. "joker_pick6"), wird immer diese Karte gezogen.
 const FORCE_EVENT_CARD_ID = null;
 let eventForceCardId = null; // UI: forced event card (persistent until changed)
@@ -6034,7 +6084,8 @@ function computeMoveTargets(piece,steps){
           // - Gegner darf geschmissen werden (außer Schutzschild)
           // - Eigene Figur blockt
           if(op && op.team !== piece.team && !op.shielded){
-            state.highlighted.add(cur.id);
+            const nodeMeta = nodesById.get(cur.id);
+            if(nodeMeta?.type !== 'portal') state.highlighted.add(cur.id);
           }
         }
       }
@@ -6045,6 +6096,13 @@ function computeMoveTargets(piece,steps){
 
       // Kein Zurück-Hüpfen (A->B->A)
       if(cur.from && nb === cur.from) continue;
+
+      // 🪨 Hindernisse dürfen nur mit ausreichend hohem Wurf betreten/überquert werden.
+      const nbMeta = nodesById.get(nb);
+      if(nbMeta?.type === 'obstacle'){
+        const minRoll = Math.max(1, Number(nbMeta?.props?.minRoll || 1));
+        if(Number(steps || 0) < minRoll) continue;
+      }
 
       // ✅ Barrikade blockt Zwischen-Schritte (nicht überspringen!)
       // Ausnahme: Sturmangriff ignoriert Barrikaden auf dem Weg für den ganzen Zug.
@@ -6906,7 +6964,14 @@ function handleTapAtWorld(wx, wy){
       // compute possible targets
       state.jokerHighlighted.clear();
       for(const n of nodes){
-        if(isFreeForBarricade(n.id) || n.id === hit.id) state.jokerHighlighted.add(n.id);
+        if(n.id !== hit.id && isFreeForBarricade(n.id)) state.jokerHighlighted.add(n.id);
+      }
+      if(state.jokerHighlighted.size <= 0){
+        state.jokerData = {};
+        state.jokerMode = "moveBarricadePick";
+        setStatus(`Team ${team}: Aktuell gibt es kein freies Zielfeld für eine Barrikade.`);
+        updateJokerUI();
+        return;
       }
       state.jokerMode = "moveBarricadePlace";
       setStatus(`Team ${team}: Barrikade gewählt. Tippe das neue Feld.`);
@@ -6922,6 +6987,13 @@ function handleTapAtWorld(wx, wy){
       }
       if(!state.jokerHighlighted.has(hit.id)) return;
       if(isOnlineAuthorityActive()){
+        if(state.phase === 'eventBarricadeMove' && state.pendingEventBarricadeMove){
+          requestServerEventBarricadeMove(String(fromId || ''), String(hit.id || ''));
+          state.jokerMode = null;
+          state.jokerData = {};
+          state.jokerHighlighted.clear();
+          return;
+        }
         requestServerJokerUse('moveBarricade', { fromNodeId: String(fromId || ''), toNodeId: String(hit.id || '') });
         clearJokerMode(`Team ${team}: Barrikaden-Joker an Server gesendet.`);
         return;
@@ -7068,28 +7140,35 @@ function handleTapAtWorld(wx, wy){
     if(!piece) return;
     const curPortal = piece.node;
 
-    // Tippe aktuelles Portal nochmal = bleiben (Portal ist damit "verbraucht")
+    // Tippe aktuelles Portal nochmal = bleiben.
     if(hit.id === curPortal){
+      if(isOnlineAuthorityActive()){
+        requestServerPortalUse(curPortal);
+        return;
+      }
       ensurePortalState();
-  state.portalHighlighted.clear();
+      state.portalHighlighted.clear();
       state.portalUsedThisTurn = true;
-      afterLandingNoPortal(piece); // beendet Zug sauber / 6 nochmal
+      afterLandingNoPortal(piece);
       return;
     }
 
     if(!state.portalHighlighted.has(hit.id)) return;
 
-    // Teleport
+    if(isOnlineAuthorityActive()){
+      requestServerPortalUse(hit.id);
+      return;
+    }
+
+    // Offline/Test lokal: Teleport
     state.occupied.delete(piece.node);
     piece.prev = piece.node;
     piece.node = hit.id;
     state.occupied.set(hit.id, piece.id);
 
     ensurePortalState();
-  state.portalHighlighted.clear();
+    state.portalHighlighted.clear();
     state.portalUsedThisTurn = true;
-
-    // Nach Teleport: Barrikade prüfen / sonst Zug beenden
     afterLandingNoPortal(piece);
     return;
   }
@@ -7277,6 +7356,17 @@ canvas.addEventListener("dblclick", (e)=>{
 btnFit?.addEventListener("click", ()=> fitToBoard(60));
 
 
+// ---------- Kein legaler Zug ----------
+btnPassNoMove?.addEventListener('click', ()=>{
+  if(state.gameOver || !state.noLegalMove || !['choosePiece','chooseTarget'].includes(state.phase)) return;
+  if(isOnlineAuthorityActive()){
+    requestServerPassNoMove();
+    return;
+  }
+  state.noLegalMove = false;
+  nextTurn();
+});
+
 // ---------- Würfeln ----------
 btnRoll.addEventListener("click",()=>{
   if(state.gameOver) return;
@@ -7317,6 +7407,11 @@ if(selPlayerCount){
   selPlayerCount.value = String(state.players.length || 4);
 
   selPlayerCount.addEventListener("change", ()=>{
+    if(online.enabled){
+      selPlayerCount.value = String(state.players.length || 4);
+      setStatus('Die Spieleranzahl wird im Online-Spiel von der Lobby festgelegt.');
+      return;
+    }
     const n = Number(selPlayerCount.value || 4);
 
     // Nur vor dem Laufen umstellen (sicher)
@@ -8065,61 +8160,65 @@ async function load(){
 
 // ---- Sidebar UI: Ereigniskarte fürs nächste Feld auswählen (Test-Modus) ----
 function ensureEventSelectUI(){
-  const sidebar = document.getElementById("sidePanel") || document.getElementById("sidebar") || document.body;
-  const hostParent = (typeof jokerButtonsWrap !== "undefined" && jokerButtonsWrap && jokerButtonsWrap.parentElement) ? jokerButtonsWrap.parentElement : sidebar;
-
-  let box = document.getElementById("eventForceBox");
-  if(box) return box;
-
-  box = document.createElement("div");
-  box.id = "eventForceBox";
-  box.style.cssText = "margin-top:12px; padding:10px; border-radius:14px; background:rgba(10,12,18,.42); border:1px solid rgba(255,255,255,.10); color:rgba(245,250,255,.92); font:700 13px system-ui, -apple-system, Segoe UI, Roboto, Arial;";
-
-  const h = document.createElement("div");
-  h.textContent = "Event wählen (Test)";
-  h.style.cssText = "font-weight:900; margin-bottom:8px; letter-spacing:.2px;";
-  box.appendChild(h);
-
-  const sel = document.createElement("select");
-  sel.id = "eventForceSelect";
-  sel.style.cssText = "width:100%; padding:10px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:rgba(10,12,18,.35); color:rgba(245,250,255,.92); font-weight:800;";
-  box.appendChild(sel);
-
-  const hint = document.createElement("div");
-  hint.style.cssText = "margin-top:8px; opacity:.75; font-size:12px; line-height:1.25;";
-  hint.textContent = "Diese Auswahl bleibt aktiv, bis du sie änderst. (Nächste Felder ziehen diese Karte)";
-  box.appendChild(hint);
-
-  function rebuildOptions(){
-    sel.innerHTML = "";
-    const opt0 = document.createElement("option");
-    opt0.value = "";
-    opt0.textContent = "— Zufällig —";
-    sel.appendChild(opt0);
-
-    const seen = new Set();
-    for(const c of EVENT_DECK){
-      if(seen.has(c.id)) continue;
-      seen.add(c.id);
-      const o = document.createElement("option");
-      o.value = c.id;
-      const weight = getEventCardWeight(c);
-      o.textContent = weight > 0 ? `${c.title} (x${weight})` : `${c.title} (x0)`;
-      sel.appendChild(o);
-    }
-
-    sel.value = eventForceCardId || "";
+  let box = document.getElementById('eventForceBox');
+  if(!isDebugUiEnabled()){
+    if(box) box.remove();
+    return null;
   }
 
-  rebuildOptions();
+  const sidebar = document.getElementById('sidePanel') || document.getElementById('sidebar') || document.body;
+  const hostParent = (jokerButtonsWrap && jokerButtonsWrap.parentElement) ? jokerButtonsWrap.parentElement : sidebar;
+  if(box){
+    const existingSelect = document.getElementById('eventForceSelect');
+    if(existingSelect) existingSelect.value = eventForceCardId || '';
+    return box;
+  }
 
-  sel.addEventListener("change", ()=>{
+  box = document.createElement('div');
+  box.id = 'eventForceBox';
+  box.style.cssText = 'margin-top:12px; padding:10px; border-radius:14px; background:rgba(10,12,18,.42); border:1px solid rgba(255,255,255,.10); color:rgba(245,250,255,.92); font:700 13px system-ui, -apple-system, Segoe UI, Roboto, Arial;';
+
+  const h = document.createElement('div');
+  h.textContent = 'Event wählen (Test)';
+  h.style.cssText = 'font-weight:900; margin-bottom:8px; letter-spacing:.2px;';
+  box.appendChild(h);
+
+  const sel = document.createElement('select');
+  sel.id = 'eventForceSelect';
+  sel.style.cssText = 'width:100%; padding:10px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:rgba(10,12,18,.35); color:rgba(245,250,255,.92); font-weight:800;';
+  box.appendChild(sel);
+
+  const opt0 = document.createElement('option');
+  opt0.value = '';
+  opt0.textContent = '— Zufällig —';
+  sel.appendChild(opt0);
+  const seen = new Set();
+  for(const c of EVENT_DECK){
+    if(seen.has(c.id)) continue;
+    seen.add(c.id);
+    const o = document.createElement('option');
+    o.value = c.id;
+    const weight = getEventCardWeight(c);
+    o.textContent = weight > 0 ? `${c.title} (x${weight})` : `${c.title} (x0)`;
+    sel.appendChild(o);
+  }
+  sel.value = eventForceCardId || '';
+
+  const hint = document.createElement('div');
+  hint.style.cssText = 'margin-top:8px; opacity:.75; font-size:12px; line-height:1.25;';
+  hint.textContent = 'Nur im Testmodus. Die Auswahl gilt für die nächste Landung und bleibt aktiv, bis du sie änderst.';
+  box.appendChild(hint);
+
+  sel.addEventListener('change', ()=>{
     eventForceCardId = sel.value || null;
+    if(isOnlineAuthorityActive()){
+      sendServerAction('debug_force_event', { cardId: eventForceCardId || '' });
+    }
     if(eventForceCardId){
       const c = EVENT_DECK.find(x=>x.id===eventForceCardId);
       setStatus(`🧪 Test aktiv: ${c ? c.title : eventForceCardId}`);
     }else{
-      setStatus("🧪 Test aus: Ereigniskarten wieder zufällig.");
+      setStatus('🧪 Test: Ereigniskarten wieder zufällig.');
     }
   });
 
