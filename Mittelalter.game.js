@@ -801,8 +801,12 @@ function resolveOnlineContext(){
 function isOnlineAuthorityActive(){
   return !!(online.enabled && online.connected && online.joined);
 }
+function isOnlineReconnectPaused(){
+  return !!(online.enabled && online.room && online.room.status === 'running' && online.room.gameState?.paused);
+}
 function isLocalPlayersTurn(){
   if(!isOnlineAuthorityActive()) return true;
+  if(isOnlineReconnectPaused()) return false;
   return !!online.currentTurnPlayerId && online.currentTurnPlayerId === online.playerId;
 }
 
@@ -959,7 +963,14 @@ function applyServerRoomState(room, opts={}){
   const snap = room.gameState?.snapshot || null;
   if(snap) applyServerSnapshot(snap, { silentDraw:true });
 
-  if(state.phase === 'needRoll'){
+  if(isOnlineReconnectPaused()){
+    const missingNames = Array.isArray(room.players)
+      ? room.players.filter((p)=>p && p.connected === false).map((p)=>p.name || 'Spieler')
+      : [];
+    setStatus(missingNames.length
+      ? `Spiel pausiert – warte auf Reconnect: ${missingNames.join(', ')}. Der Spielstand und der aktuelle Zug bleiben unverändert.`
+      : 'Spiel pausiert – Reconnect läuft. Der Spielstand bleibt unverändert.');
+  } else if(state.phase === 'needRoll'){
     if(isLocalPlayersTurn()) setStatus(`Team ${currentTeam()} ist dran – du kannst jetzt würfeln.`);
     else setStatus(`Team ${currentTeam()} ist dran – Wurf wird vom Server gesteuert.`);
   } else {
@@ -1004,6 +1015,16 @@ function applyAuthoritativeRoll(roll){
 }
 function sendServerAction(action, payload={}){
   if(!isOnlineAuthorityActive()) return false;
+  if(isOnlineReconnectPaused()){
+    const missingNames = Array.isArray(online.room?.players)
+      ? online.room.players.filter((p)=>p && p.connected === false).map((p)=>p.name || 'Spieler')
+      : [];
+    setStatus(missingNames.length
+      ? `Spiel pausiert – warte auf Reconnect: ${missingNames.join(', ')}.`
+      : 'Spiel pausiert – Reconnect läuft.');
+    updateTurnSystemUI();
+    return false;
+  }
   const requestId = `req_${Date.now()}_${online.reqSeq++}`;
   const packet = { type:'server_action', action, requestId, ...payload };
   try{
@@ -1767,22 +1788,26 @@ function updateTurnSystemUI(){
     playerCountControl.title = online.enabled ? 'Spieleranzahl wird von der Lobby festgelegt.' : 'Spieleranzahl';
   }
 
+  const reconnectPaused = isOnlineReconnectPaused();
+
   if(btnRoll){
-    const canRollLocal = !state.gameOver && state.phase === 'needRoll' && (!isOnlineAuthorityActive() || isLocalPlayersTurn());
+    const canRollLocal = !reconnectPaused && !state.gameOver && state.phase === 'needRoll' && (!isOnlineAuthorityActive() || isLocalPlayersTurn());
     btnRoll.disabled = !canRollLocal;
     btnRoll.style.opacity = canRollLocal ? '1' : '.55';
     btnRoll.style.cursor = canRollLocal ? 'pointer' : 'not-allowed';
     btnRoll.title = canRollLocal
       ? 'Jetzt würfeln'
-      : (state.gameOver
-          ? 'Spiel beendet'
-          : (state.phase !== 'needRoll'
-              ? `Aktuelle Phase: ${phaseLabel}`
-              : 'Der andere Spieler ist am Zug'));
+      : (reconnectPaused
+          ? 'Spiel pausiert – warte auf Reconnect'
+          : (state.gameOver
+              ? 'Spiel beendet'
+              : (state.phase !== 'needRoll'
+                  ? `Aktuelle Phase: ${phaseLabel}`
+                  : 'Der andere Spieler ist am Zug')));
   }
 
   if(btnPassNoMove){
-    const canPass = !state.gameOver && !!state.noLegalMove && ['choosePiece','chooseTarget'].includes(state.phase) && (!isOnlineAuthorityActive() || isLocalPlayersTurn());
+    const canPass = !reconnectPaused && !state.gameOver && !!state.noLegalMove && ['choosePiece','chooseTarget'].includes(state.phase) && (!isOnlineAuthorityActive() || isLocalPlayersTurn());
     btnPassNoMove.hidden = !canPass;
     btnPassNoMove.disabled = !canPass;
     btnPassNoMove.title = canPass ? 'Kein legaler Zug: Zug ohne Bewegung beenden' : '';
@@ -1954,7 +1979,7 @@ const BOSS_TYPES = {
     traits: [
       "Zieht alle Figuren am Rundenende 1 Feld näher zu sich (Startfelder inkl.)",
       "Wenn Zielfeld belegt: Figur rutscht 1 Feld weiter (Reihenfolge Team 1→4)",
-      "Landung auf Barrikade: Spieler platziert sie neu",
+      "Landung auf Barrikade: sie wird in der Bossphase automatisch neu versetzt",
       "Zielpunkte/Ereignisse werden normal eingesammelt"
     ],
     moveOnRoundEnd: true,
@@ -2186,19 +2211,18 @@ function bfsNextStep(startId, goalIds, blockedFn){
 }
 
 function bossBlocked(nextId, fromId, boss){
-  // Boss ignoriert Startfelder komplett:
-  // - darf NICHT darauf laufen
-  // - darf sie auch nicht als Zwischen-Schritt nutzen
+  // Bosse ignorieren Startfelder komplett.
   const nn = nodesById.get(nextId);
   if(nn && nn.type === "start") return true;
 
-  // Boss 3 (Der Räuber): darf auf Barrikaden LANDEN (und versetzt sie). Bewegung ist Schritt-für-Schritt,
-// daher gibt es kein "Drüberspringen" – Barrikaden werden hier NICHT hart geblockt.
-  if(boss && boss.type === "reaper"){
-    // not blocked here
-  }
+  // Der Jäger wird von Barrikaden blockiert. Zerstörer und Räuber dürfen
+  // hineinlaufen, weil sie die Barrikade zerstören bzw. versetzen.
+  if(boss && boss.type === "hunter" && barricades && barricades.has(nextId)) return true;
 
-  // Schutzschild blockt Zwischen-Schritt (Boss darf nicht "drüber laufen")
+  // Andere aktive Bosse blockieren das Feld.
+  if(Array.isArray(state.bosses) && state.bosses.some(b=>b && b.id!==boss?.id && b.alive!==false && b.node===nextId)) return true;
+
+  // Schutzschild blockt den Bossweg vollständig.
   const occId = state.occupied.get(nextId);
   if(occId){
     const p = state.pieces.find(x=>x.id===occId);
@@ -2269,12 +2293,6 @@ if(!goalIds.length) return;
       }
       return;
     }
-    // Falls ein Boss auf eine Barrikade tritt: Barrikade wird entfernt (sonst kann er komplett stecken bleiben).
-    if(barricades.has(step)){
-      barricades.delete(step);
-      if(state.bossDebug) console.info("[BOSS] broke barricade at", step, "boss", boss.id);
-    }
-
     boss.node = step;
     bossCollideAt(step, boss);
   }
@@ -2472,6 +2490,7 @@ function updateBossesAfterPlayerAction(){
             .sort((a,b2)=>a.team-b2.team);
 
           for(const p of pullPieces){
+            if(p.shielded) continue;
             const step1 = nextToward(p.node);
             if(!step1) continue;
 
