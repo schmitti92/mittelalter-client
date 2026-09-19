@@ -3,25 +3,26 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
-  <title>Mittelalter – Prototyp</title>
+  <title>Mittelalter</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=EB+Garamond:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="Mittelalter.style.css?v=20260313-v11" />
+  <link rel="stylesheet" href="Mittelalter.style.css?v=20260919-final-rc2" />
   <script>
-    window.BUILD_ID = "20260313-v11";
+    window.BUILD_ID = "20260919-final-rc2";
   </script>
 </head>
 <body>
   <header class="topbar">
     <div class="title">
-      <div class="h1">Mittelalter – Prototyp</div>
+      <div class="h1">Mittelalter</div>
       <div class="h2" id="statusLine">Lade Board…</div>
     </div>
 
     <div class="controls">
       <button id="btnFit" class="btn secondary" title="Ansicht zentrieren">Zentrieren</button>
       <button id="btnRoll" class="btn primary">🎲 Würfeln</button>
+      <button id="btnPassNoMove" class="btn secondary" hidden>🚫 Zug beenden</button>
       <div class="pc">
         <span class="pcLabel">Spieler</span>
         <select id="playerCount" class="pcSelect" aria-label="Spieleranzahl">
@@ -275,10 +276,6 @@
   safeSet(sessionStorage, 'mittelalterLobby', JSON.stringify(packed));
   safeSet(localStorage, 'mittelalterLobby', JSON.stringify(packed));
 
-  console.log('[Mittelalter] Spieler:', session.playerName);
-  console.log('[Mittelalter] Raum:', session.roomCode);
-  console.log('[Mittelalter] Host:', session.isHost);
-  console.log('[Mittelalter] Modus:', session.lastMode);
 
   if (!session.playerName || !session.roomCode) {
     alert('Lobby nicht korrekt gestartet. Du wirst zurück zur Mittelalter-Lobby geleitet.');
@@ -291,14 +288,12 @@
     badge.innerHTML =
       'Spieler: <b>' + session.playerName + '</b><br>' +
       'Raum: <b>' + session.roomCode + '</b><br>' +
-      'ID: <b>' + (session.playerId || '–') + '</b><br>' +
-      'Token: <b>' + (session.sessionToken ? 'vorhanden' : 'leer / wird neu erstellt') + '</b><br>' +
       'Rolle: <b>' + (session.isHost ? 'Host' : 'Mitspieler') + '</b><br>' +
       'Modus: <b>' + (session.lastMode === 'online' ? 'Online' : 'Offline-Test') + '</b>';
   }
 })();
   </script>
 
- <script src="Mittelalter.game.js?v=308"></script>
+ <script src="Mittelalter.game.js?v=20260919-final-rc2"></script>
 </body>
 </html>
